@@ -135,20 +135,24 @@ async def login(page):
     print("  Tipo de informe seleccionado: Score Card")
     await page.wait_for_timeout(4000)
 
-    # 3. Click en "Ver Online" via JavaScript directo
-    await page.evaluate("""() => {
-        const btn = document.querySelector('input[value="Ver Online"]');
-        if (btn) btn.click();
-    }""")
-    print("  Click en Ver Online")
-
-    await page.wait_for_load_state("networkidle", timeout=20_000)
-    await page.wait_for_timeout(8000)
+    # 3. Click Ver Online — capturar popup si abre en ventana nueva
+    print("  Click en Ver Online (esperando popup o navegación)...")
+    async with page.context.expect_page() as new_page_info:
+        await page.evaluate("""() => {
+            const btn = document.querySelector('input[value="Ver Online"]');
+            if (btn) btn.click();
+        }""")
+    result_page = await new_page_info.value
+    await result_page.wait_for_load_state("networkidle", timeout=20_000)
+    await result_page.wait_for_timeout(5000)
 
     if DEBUG:
-        await page.screenshot(path="debug_scorecard.png", full_page=True)
-        print("  URL final:", page.url)
+        await result_page.screenshot(path="debug_scorecard.png", full_page=True)
+        print("  URL resultado:", result_page.url)
         print("  Screenshot guardado: debug_scorecard.png")
+
+    # Escanear la página de resultados (no la de filtros)
+    page = result_page
 
 
 async def monitor():
