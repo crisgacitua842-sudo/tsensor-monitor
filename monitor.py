@@ -103,33 +103,33 @@ async def login(page):
     # Navegar al Score Card
     print("  Navegando a Score Card...")
 
-    # 1. Click en "Mostrar Todos"
+    # 1. Click "Mostrar Todos" y esperar que la página se desbloquee
     mostrar = await page.query_selector('input[value="Mostrar Todos"], button:has-text("Mostrar Todos")')
     if mostrar:
         await mostrar.click()
-        await page.wait_for_timeout(1000)
+        print("  Click en Mostrar Todos, esperando que se desbloquee el dropdown...")
+        await page.wait_for_timeout(4000)
 
     if DEBUG:
         await page.screenshot(path="debug_after_mostrar.png")
-        # Imprimir todas las opciones de todos los <select> para identificar el correcto
+        print("URL actual:", page.url)
+        iframes = await page.evaluate("() => Array.from(document.querySelectorAll('iframe')).map(f => f.src)")
+        print("Iframes:", iframes)
         opciones = await page.evaluate("""() => {
             return Array.from(document.querySelectorAll('select')).map((s, i) => ({
-                index: i,
-                id: s.id,
-                name: s.name,
+                index: i, id: s.id, name: s.name,
                 options: Array.from(s.options).map(o => o.text.trim())
             }));
         }""")
         print("Selects encontrados:", opciones)
 
-    # 2. Seleccionar "Score Card" en el dropdown Tipo de Informe usando JavaScript
-    # (más robusto que select_option cuando hay múltiples selects)
+    # 2. Seleccionar "Score Card" en el dropdown Tipo de Informe
     selected = await page.evaluate("""() => {
         const selects = document.querySelectorAll('select');
         for (const s of selects) {
             for (const opt of s.options) {
                 const txt = opt.text.trim().toLowerCase();
-                if (txt.includes('score') || txt.includes('card') || txt.includes('informe en linea')) {
+                if (txt.includes('score') || txt.includes('card') || txt.includes('linea')) {
                     s.value = opt.value;
                     s.dispatchEvent(new Event('change', { bubbles: true }));
                     return opt.text.trim();
@@ -139,18 +139,18 @@ async def login(page):
         return null;
     }""")
     print(f"  Tipo de informe seleccionado: {selected}")
-    await page.wait_for_timeout(500)
+
+    # Esperar que se habilite el botón Ver Online
+    print("  Esperando que se habilite Ver Online...")
+    await page.wait_for_timeout(4000)
 
     # 3. Click en "Ver Online"
     ver_online = await page.query_selector('input[value="Ver Online"], button:has-text("Ver Online")')
     if ver_online:
         await ver_online.click()
-    else:
-        # Intentar con submit por texto
-        await page.click('input[type="submit"]:near(:text("Ver Online"))', timeout=5000)
 
     await page.wait_for_load_state("networkidle", timeout=20_000)
-    await page.wait_for_timeout(4000)
+    await page.wait_for_timeout(5000)
 
     if DEBUG:
         await page.screenshot(path="debug_scorecard.png")
