@@ -96,9 +96,10 @@ async def login(page):
     await page.wait_for_load_state("networkidle", timeout=20_000)
     await page.wait_for_timeout(2000)
 
-    # Después del login redirige al home — volver a la página de informes
-    print("  Navegando a página de informes...")
-    await page.goto(TSENSOR_URL, wait_until="networkidle", timeout=30_000)
+    # Después del login redirige al home — hacer click en TELEMETRÍA del menú
+    print("  Haciendo click en TELEMETRÍA...")
+    await page.click('a:has-text("TELEMETRÍA"), a:has-text("Telemetría")')
+    await page.wait_for_load_state("networkidle", timeout=20_000)
     await page.wait_for_timeout(3000)
 
     if DEBUG:
