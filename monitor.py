@@ -9,12 +9,13 @@ import os
 import re
 import json
 import aiohttp
+from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 from datetime import datetime
 
-TSENSOR_URL   = os.environ.get("TSENSOR_URL", "https://app.tsensor.online/informes/menu/98")
-TSENSOR_USER  = os.environ.get("TSENSOR_USER")
-TSENSOR_PASS  = os.environ.get("TSENSOR_PASS")
+TSENSOR_URL      = os.environ.get("TSENSOR_URL", "https://app.tsensor.online/informes/menu/98")
+TSENSOR_USER     = os.environ.get("TSENSOR_USER")
+TSENSOR_PASS     = os.environ.get("TSENSOR_PASS")
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
@@ -32,49 +33,62 @@ async def send_telegram(text: str):
                 print("Alerta enviada por Telegram.")
 
 
-async def get_red_sensors(page):
+def _is_red_style(style: str) -> bool:
+    if not style:
+        return False
+    # rgb(r, g, b)
+    m = re.search(r'background(?:-color)?\s*:\s*rgb\((\d+),\s*(\d+),\s*(\d+)\)', style, re.I)
+    if m:
+        r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return r > 150 and g < 100 and b < 100
+    # #rrggbb
+    m = re.search(r'background(?:-color)?\s*:\s*#([0-9a-fA-F]{6})\b', style, re.I)
+    if m:
+        hx = m.group(1)
+        r, g, b = int(hx[0:2], 16), int(hx[2:4], 16), int(hx[4:6], 16)
+        return r > 150 and g < 100 and b < 100
+    # #rgb
+    m = re.search(r'background(?:-color)?\s*:\s*#([0-9a-fA-F]{3})\b', style, re.I)
+    if m:
+        hx = m.group(1)
+        r, g, b = int(hx[0] * 2, 16), int(hx[1] * 2, 16), int(hx[2] * 2, 16)
+        return r > 150 and g < 100 and b < 100
+    return False
+
+
+def parse_red_sensors(html: str) -> list:
+    """Busca tarjetas de sensores con fondo rojo en el HTML del Score Card."""
+    soup = BeautifulSoup(html, 'html.parser')
+    results = []
+    seen = set()
+
+    for el in soup.find_all(True):
+        style = el.get('style', '')
+        if not _is_red_style(style):
+            continue
+        text = el.get_text(separator=' ', strip=True)
+        if '°C' not in text:
+            continue
+        if len(text) > 400 or len(text) < 10:
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        results.append({'text': re.sub(r'\s+', ' ', text)})
+
+    return results
+
+
+async def prepare_session(page) -> tuple:
     """
-    Busca tarjetas de sensores con fondo rojo (temperatura fuera de rango crítico).
-    Solo considera elementos que contengan '°C' para evitar falsos positivos
-    con otros elementos rojos de la UI (logos, iconos, etc).
+    Hace login con Playwright, navega hasta el formulario del Score Card,
+    selecciona todos los filtros y devuelve (cookies, form_pairs, action_url).
     """
-    sensors = await page.evaluate("""() => {
-        function isRed(colorStr) {
-            if (!colorStr) return false;
-            const m = colorStr.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
-            if (!m) return false;
-            const [r, g, b] = [+m[1], +m[2], +m[3]];
-            return r > 150 && g < 100 && b < 100;
-        }
-
-        const results = [];
-        const seen = new Set();
-
-        for (const el of document.querySelectorAll('*')) {
-            const style = window.getComputedStyle(el);
-            if (!isRed(style.backgroundColor)) continue;
-
-            const text = (el.innerText || '').trim();
-
-            // Solo tarjetas de sensores: deben contener °C y un nombre de sensor
-            if (!text.includes('°C')) continue;
-            if (text.length > 400 || text.length < 10) continue;
-            if (seen.has(text)) continue;
-            seen.add(text);
-
-            results.push({ text: text.replace(/\\s+/g, ' ') });
-        }
-        return results;
-    }""")
-    return sensors
-
-
-async def login(page):
     print("  Cargando página de login...")
     await page.goto(TSENSOR_URL, wait_until="domcontentloaded", timeout=30_000)
     await page.wait_for_timeout(2000)
 
-    # Llenar usuario
+    # Usuario
     for sel in ['input[type="text"]', 'input[name*="user" i]',
                 'input[placeholder*="usuario" i]', 'input[id*="user" i]']:
         el = await page.query_selector(sel)
@@ -82,10 +96,8 @@ async def login(page):
             await el.fill(TSENSOR_USER)
             break
 
-    # Llenar contraseña
+    # Contraseña y login
     await page.fill('input[type="password"]', TSENSOR_PASS)
-
-    # Click en botón ENTRAR
     for sel in ['button:has-text("ENTRAR")', 'button:has-text("Entrar")',
                 'button[type="submit"]', 'input[type="submit"]']:
         btn = await page.query_selector(sel)
@@ -96,7 +108,7 @@ async def login(page):
     await page.wait_for_load_state("networkidle", timeout=20_000)
     await page.wait_for_timeout(2000)
 
-    # Después del login redirige al home — hacer click en TELEMETRÍA del menú
+    # Después del login redirige al home — ir a TELEMETRÍA
     print("  Haciendo click en TELEMETRÍA...")
     await page.click('a:has-text("TELEMETRÍA"), a:has-text("Telemetría")')
     await page.wait_for_load_state("networkidle", timeout=20_000)
@@ -104,80 +116,116 @@ async def login(page):
 
     if DEBUG:
         await page.screenshot(path="debug_login.png")
-        print("  Screenshot guardado: debug_login.png")
 
-    # Navegar al Score Card
-    print("  Navegando a Score Card...")
-
-    # 1. Click "Mostrar Todos" y esperar carga de datos
+    # Mostrar Todos para cargar los elementos del formulario
     mostrar = await page.query_selector('input[value="Mostrar Todos"], button:has-text("Mostrar Todos")')
     if mostrar:
         await mostrar.click()
         print("  Click en Mostrar Todos, esperando carga...")
     await page.wait_for_timeout(6000)
 
-    if DEBUG:
-        await page.screenshot(path="debug_after_mostrar.png")
-        print("URL actual:", page.url)
-
-    # 2. Seleccionar "Score Card" via JavaScript (dispara eventos correctamente)
+    # Seleccionar Score Card vía JS
     await page.evaluate("""() => {
         const sel = document.querySelector('#InformeId');
+        if (!sel) return;
         for (const opt of sel.options) {
             if (opt.text.trim() === 'Score Card') {
                 sel.value = opt.value;
                 sel.dispatchEvent(new Event('change', { bubbles: true }));
-                sel.dispatchEvent(new Event('input', { bubbles: true }));
+                sel.dispatchEvent(new Event('input',  { bubbles: true }));
                 break;
             }
         }
     }""")
-    print("  Tipo de informe seleccionado: Score Card")
+    print("  Score Card seleccionado")
     await page.wait_for_timeout(4000)
 
-    # Interceptar requests para capturar el POST real de Ver Online
-    captured_requests = []
-    async def capture_request(request):
-        if request.method == "POST":
-            captured_requests.append({
-                "url": request.url,
-                "post_data": request.post_data
-            })
-    page.on("request", capture_request)
-
-    # 3. Seleccionar todos los filtros y hacer click nativo en Ver Online
-    print("  Seleccionando todos los filtros...")
+    # Seleccionar todas las opciones de los filtros
     await page.evaluate("""() => {
         for (const sel of document.querySelectorAll('select')) {
             if (sel.id === 'InformeId') continue;
             for (const opt of sel.options) opt.selected = true;
         }
         const inf = document.querySelector('#InformeId');
+        if (!inf) return;
         for (const opt of inf.options) {
             if (opt.text.trim() === 'Score Card') { inf.value = opt.value; break; }
         }
     }""")
 
     if DEBUG:
-        all_btns = await page.evaluate("""() =>
-            Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"]'))
-            .map(b => ({tag: b.tagName, value: b.value, text: b.textContent?.trim(), name: b.name, type: b.type}))
-        """)
-        print("  Botones en página:", all_btns)
+        await page.screenshot(path="debug_after_filters.png")
 
-    # Click nativo en cualquier botón de tipo submit
-    submit_btn = await page.query_selector('input[type="submit"], button[type="submit"]')
-    if submit_btn:
-        await submit_btn.click(force=True)
-        print("  Click en botón submit")
+    # Extraer datos del formulario como lista de pares [nombre, valor]
+    form_info = await page.evaluate("""() => {
+        const form = document.querySelector('form');
+        if (!form) return null;
+        const pairs = [];
+        for (const el of form.elements) {
+            if (!el.name) continue;
+            if (el.tagName === 'SELECT') {
+                for (const opt of el.options) {
+                    if (opt.selected) pairs.push([el.name, opt.value]);
+                }
+            } else if (el.type === 'checkbox' || el.type === 'radio') {
+                if (el.checked) pairs.push([el.name, el.value]);
+            } else if (el.type !== 'submit' && el.type !== 'button') {
+                pairs.push([el.name, el.value || '']);
+            }
+        }
+        return { action: form.action || window.location.href, pairs };
+    }""")
 
-    await page.wait_for_load_state("networkidle", timeout=20_000)
-    await page.wait_for_timeout(6000)
+    if not form_info:
+        raise RuntimeError("No se encontró el formulario en la página")
+
+    # Agregar el valor del botón submit
+    form_info['pairs'].append(['boton', 'Ver Online'])
+
+    # Cookies de la sesión activa
+    cookies = await page.context.cookies()
 
     if DEBUG:
-        print("  Requests POST capturados:", captured_requests[:2])
-        await page.screenshot(path="debug_scorecard.png", full_page=True)
-        print("  URL resultado:", page.url)
+        print(f"  Pares de formulario: {len(form_info['pairs'])}")
+        print(f"  Cookies: {len(cookies)}")
+        print(f"  URL de acción: {form_info['action']}")
+
+    return cookies, form_info['pairs'], form_info['action']
+
+
+async def fetch_scorecard(cookies: list, form_pairs: list, action_url: str) -> str:
+    """Envía el POST del Score Card directamente con aiohttp usando las cookies de Playwright."""
+    cookie_header = '; '.join(f"{c['name']}={c['value']}" for c in cookies)
+
+    headers = {
+        'Cookie': cookie_header,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': (
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+        ),
+        'Referer': action_url,
+        'Origin': 'https://app.tsensor.online',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'es-CL,es;q=0.9',
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            action_url,
+            data=form_pairs,
+            headers=headers,
+            allow_redirects=True,
+            timeout=aiohttp.ClientTimeout(total=60),
+        ) as resp:
+            print(f"  POST Score Card: status={resp.status}, url={resp.url}")
+            html = await resp.text()
+            print(f"  Respuesta HTML: {len(html):,} bytes")
+            if DEBUG:
+                with open("debug_scorecard.html", "w", encoding="utf-8") as f:
+                    f.write(html)
+                print("  HTML guardado: debug_scorecard.html")
+            return html
 
 
 async def monitor():
@@ -189,13 +237,21 @@ async def monitor():
             ts = datetime.now().strftime("%H:%M:%S")
             print(f"[{ts}] Iniciando chequeo T-Sensor...")
 
-            await login(page)
+            # 1. Login + preparar formulario con Playwright
+            cookies, form_pairs, action_url = await prepare_session(page)
 
+            # 2. POST directo con aiohttp (evita el problema de renderizado headless)
+            print("  Obteniendo Score Card vía HTTP directo...")
+            html = await fetch_scorecard(cookies, form_pairs, action_url)
+
+            # 3. Parsear HTML en busca de sensores rojos
             print("  Buscando sensores en rojo...")
-            red_items = await get_red_sensors(page)
+            red_items = parse_red_sensors(html)
 
             if DEBUG:
-                print("Elementos rojos:", json.dumps(red_items, indent=2, ensure_ascii=False))
+                print(f"  Sensores rojos encontrados: {len(red_items)}")
+                for item in red_items[:5]:
+                    print(f"    {item['text'][:120]}")
 
             if red_items:
                 now = datetime.now().strftime("%H:%M  %d/%m/%Y")
@@ -208,10 +264,12 @@ async def monitor():
                 print(f"  ALERTA: {len(red_items)} sensores fuera de rango.")
                 await send_telegram(msg)
             else:
-                print(f"  Todo normal — sin alertas.")
+                print("  Todo normal — sin alertas.")
 
         except Exception as e:
             print(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
             if DEBUG:
                 try:
                     await page.screenshot(path="debug_error.png")
