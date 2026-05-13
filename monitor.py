@@ -135,45 +135,49 @@ async def login(page):
     print("  Tipo de informe seleccionado: Score Card")
     await page.wait_for_timeout(4000)
 
-    # 3. Seleccionar todos los filtros e incluir el nombre del botón Ver Online en el POST
-    print("  Preparando formulario completo...")
+    # Interceptar requests para capturar el POST real de Ver Online
+    captured_requests = []
+    async def capture_request(request):
+        if request.method == "POST":
+            captured_requests.append({
+                "url": request.url,
+                "post_data": request.post_data
+            })
+    page.on("request", capture_request)
+
+    # 3. Seleccionar todos los filtros y hacer click nativo en Ver Online
+    print("  Seleccionando todos los filtros...")
     await page.evaluate("""() => {
-        // Seleccionar todos los options en cada multi-select de filtros
         for (const sel of document.querySelectorAll('select')) {
             if (sel.id === 'InformeId') continue;
             for (const opt of sel.options) opt.selected = true;
         }
-        // Confirmar Score Card
         const inf = document.querySelector('#InformeId');
         for (const opt of inf.options) {
             if (opt.text.trim() === 'Score Card') { inf.value = opt.value; break; }
         }
-        // Agregar el nombre/valor del botón Ver Online al form (necesario para que el servidor lo procese)
-        const btn = document.querySelector('input[value="Ver Online"]');
-        if (btn && btn.name) {
-            const hidden = document.createElement('input');
-            hidden.type = 'hidden';
-            hidden.name = btn.name;
-            hidden.value = btn.value;
-            document.querySelector('form').appendChild(hidden);
-        }
     }""")
 
     if DEBUG:
-        btn_info = await page.evaluate("""() => {
-            const btn = document.querySelector('input[value="Ver Online"]');
-            return { name: btn?.name, value: btn?.value, type: btn?.type };
-        }""")
-        print("  Botón Ver Online:", btn_info)
+        all_btns = await page.evaluate("""() =>
+            Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"]'))
+            .map(b => ({tag: b.tagName, value: b.value, text: b.textContent?.trim(), name: b.name, type: b.type}))
+        """)
+        print("  Botones en página:", all_btns)
 
-    await page.evaluate("document.querySelector('form').submit()")
+    # Click nativo en cualquier botón de tipo submit
+    submit_btn = await page.query_selector('input[type="submit"], button[type="submit"]')
+    if submit_btn:
+        await submit_btn.click(force=True)
+        print("  Click en botón submit")
+
     await page.wait_for_load_state("networkidle", timeout=20_000)
     await page.wait_for_timeout(6000)
 
     if DEBUG:
+        print("  Requests POST capturados:", captured_requests[:2])
         await page.screenshot(path="debug_scorecard.png", full_page=True)
         print("  URL resultado:", page.url)
-        print("  Screenshot guardado: debug_scorecard.png")
 
 
 async def monitor():
