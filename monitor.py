@@ -94,11 +94,36 @@ async def login(page):
             break
 
     await page.wait_for_load_state("networkidle", timeout=20_000)
-    await page.wait_for_timeout(4000)  # Espera contenido dinámico
+    await page.wait_for_timeout(3000)
 
     if DEBUG:
         await page.screenshot(path="debug_login.png")
         print("  Screenshot guardado: debug_login.png")
+
+    # Navegar al Score Card
+    print("  Navegando a Score Card...")
+
+    # 1. Click en "Mostrar Todos"
+    mostrar = await page.query_selector('input[value="Mostrar Todos"], button:has-text("Mostrar Todos")')
+    if mostrar:
+        await mostrar.click()
+        await page.wait_for_timeout(1000)
+
+    # 2. Seleccionar "Score Card" en el dropdown Tipo de Informe
+    await page.select_option('select', label='Score Card')
+    await page.wait_for_timeout(500)
+
+    # 3. Click en "Ver Online"
+    ver_online = await page.query_selector('input[value="Ver Online"], button:has-text("Ver Online")')
+    if ver_online:
+        await ver_online.click()
+
+    await page.wait_for_load_state("networkidle", timeout=20_000)
+    await page.wait_for_timeout(4000)
+
+    if DEBUG:
+        await page.screenshot(path="debug_scorecard.png")
+        print("  Screenshot guardado: debug_scorecard.png")
 
 
 async def monitor():
