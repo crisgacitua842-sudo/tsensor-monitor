@@ -135,24 +135,37 @@ async def login(page):
     print("  Tipo de informe seleccionado: Score Card")
     await page.wait_for_timeout(4000)
 
-    # 3. Click Ver Online — capturar popup si abre en ventana nueva
-    print("  Click en Ver Online (esperando popup o navegación)...")
-    async with page.context.expect_page() as new_page_info:
-        await page.evaluate("""() => {
-            const btn = document.querySelector('input[value="Ver Online"]');
-            if (btn) btn.click();
-        }""")
-    result_page = await new_page_info.value
-    await result_page.wait_for_load_state("networkidle", timeout=20_000)
-    await result_page.wait_for_timeout(5000)
+    # 3. Seleccionar TODOS los items en cada lista y hacer submit del form
+    print("  Seleccionando todos los filtros y enviando formulario...")
+    await page.evaluate("""() => {
+        // Seleccionar todos los options en cada multi-select de filtros
+        for (const sel of document.querySelectorAll('select')) {
+            if (sel.id === 'InformeId') continue;
+            for (const opt of sel.options) opt.selected = true;
+        }
+        // Confirmar Score Card en el dropdown de tipo
+        const inf = document.querySelector('#InformeId');
+        for (const opt of inf.options) {
+            if (opt.text.trim() === 'Score Card') { inf.value = opt.value; break; }
+        }
+    }""")
 
     if DEBUG:
-        await result_page.screenshot(path="debug_scorecard.png", full_page=True)
-        print("  URL resultado:", result_page.url)
-        print("  Screenshot guardado: debug_scorecard.png")
+        form_info = await page.evaluate("""() => {
+            const f = document.querySelector('form');
+            return { action: f?.action, method: f?.method, id: f?.id };
+        }""")
+        print("  Form info:", form_info)
 
-    # Escanear la página de resultados (no la de filtros)
-    page = result_page
+    # Submit real del formulario (no click de botón)
+    await page.evaluate("document.querySelector('form').submit()")
+    await page.wait_for_load_state("networkidle", timeout=20_000)
+    await page.wait_for_timeout(6000)
+
+    if DEBUG:
+        await page.screenshot(path="debug_scorecard.png", full_page=True)
+        print("  URL resultado:", page.url)
+        print("  Screenshot guardado: debug_scorecard.png")
 
 
 async def monitor():
