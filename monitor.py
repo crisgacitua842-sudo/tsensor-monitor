@@ -109,38 +109,31 @@ async def login(page):
     # Navegar al Score Card
     print("  Navegando a Score Card...")
 
-    # 1. Click "Mostrar Todos" y esperar que la página se desbloquee
+    # 1. Click "Mostrar Todos" y esperar que el dropdown se habilite
     mostrar = await page.query_selector('input[value="Mostrar Todos"], button:has-text("Mostrar Todos")')
     if mostrar:
         await mostrar.click()
-        print("  Click en Mostrar Todos, esperando que se desbloquee el dropdown...")
-        await page.wait_for_timeout(4000)
+        print("  Click en Mostrar Todos, esperando que se habilite el dropdown...")
+
+    # Esperar a que #InformeId deje de estar deshabilitado (carga async)
+    await page.wait_for_selector('#InformeId:not([disabled])', timeout=20_000)
+    await page.wait_for_timeout(1000)
 
     if DEBUG:
         await page.screenshot(path="debug_after_mostrar.png")
         print("URL actual:", page.url)
-        iframes = await page.evaluate("() => Array.from(document.querySelectorAll('iframe')).map(f => f.src)")
-        print("Iframes:", iframes)
-        opciones = await page.evaluate("""() => {
-            return Array.from(document.querySelectorAll('select')).map((s, i) => ({
-                index: i, id: s.id, name: s.name,
-                options: Array.from(s.options).map(o => o.text.trim())
-            }));
-        }""")
-        print("Selects encontrados:", opciones)
 
-    # 2. Seleccionar "Score Card" en el dropdown Tipo de Informe (por ID exacto)
+    # 2. Seleccionar "Score Card" en el dropdown Tipo de Informe
     await page.select_option('#InformeId', label='Score Card')
     print("  Tipo de informe seleccionado: Score Card")
 
-    # Esperar que se habilite el botón Ver Online
+    # Esperar que "Ver Online" se habilite
     print("  Esperando que se habilite Ver Online...")
-    await page.wait_for_timeout(4000)
+    await page.wait_for_selector('input[value="Ver Online"]:not([disabled])', timeout=20_000)
+    await page.wait_for_timeout(1000)
 
     # 3. Click en "Ver Online"
-    ver_online = await page.query_selector('input[value="Ver Online"], button:has-text("Ver Online")')
-    if ver_online:
-        await ver_online.click()
+    await page.click('input[value="Ver Online"]')
 
     await page.wait_for_load_state("networkidle", timeout=20_000)
     await page.wait_for_timeout(5000)
