@@ -143,10 +143,11 @@ async def login(page):
     print("  Click en Ver Online")
 
     await page.wait_for_load_state("networkidle", timeout=20_000)
-    await page.wait_for_timeout(5000)
+    await page.wait_for_timeout(8000)
 
     if DEBUG:
-        await page.screenshot(path="debug_scorecard.png")
+        await page.screenshot(path="debug_scorecard.png", full_page=True)
+        print("  URL final:", page.url)
         print("  Screenshot guardado: debug_scorecard.png")
 
 
