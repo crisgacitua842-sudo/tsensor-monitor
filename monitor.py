@@ -129,22 +129,9 @@ async def login(page):
         }""")
         print("Selects encontrados:", opciones)
 
-    # 2. Seleccionar "Score Card" en el dropdown Tipo de Informe
-    selected = await page.evaluate("""() => {
-        const selects = document.querySelectorAll('select');
-        for (const s of selects) {
-            for (const opt of s.options) {
-                const txt = opt.text.trim().toLowerCase();
-                if (txt.includes('score') || txt.includes('card') || txt.includes('linea')) {
-                    s.value = opt.value;
-                    s.dispatchEvent(new Event('change', { bubbles: true }));
-                    return opt.text.trim();
-                }
-            }
-        }
-        return null;
-    }""")
-    print(f"  Tipo de informe seleccionado: {selected}")
+    # 2. Seleccionar "Score Card" en el dropdown Tipo de Informe (por ID exacto)
+    await page.select_option('#InformeId', label='Score Card')
+    print("  Tipo de informe seleccionado: Score Card")
 
     # Esperar que se habilite el botón Ver Online
     print("  Esperando que se habilite Ver Online...")
