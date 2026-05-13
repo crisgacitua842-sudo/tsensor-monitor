@@ -33,38 +33,60 @@ async def send_telegram(text: str):
                 print("Alerta enviada por Telegram.")
 
 
-def _is_red_style(style: str) -> bool:
+async def get_red_sensors_computed(page) -> list:
+    """Detecta sensores rojos usando getComputedStyle (requiere estilos CSS cargados)."""
+    return await page.evaluate("""() => {
+        function isRed(colorStr) {
+            if (!colorStr) return false;
+            const m = colorStr.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+            if (!m) return false;
+            const [r, g, b] = [+m[1], +m[2], +m[3]];
+            return r > 150 && g < 100 && b < 100;
+        }
+        const results = [];
+        const seen = new Set();
+        for (const el of document.querySelectorAll('*')) {
+            const style = window.getComputedStyle(el);
+            if (!isRed(style.backgroundColor)) continue;
+            const text = (el.innerText || '').trim();
+            if (!text.includes('°C')) continue;
+            if (text.length > 400 || text.length < 10) continue;
+            if (seen.has(text)) continue;
+            seen.add(text);
+            results.push({ text: text.replace(/\\s+/g, ' ') });
+        }
+        return results;
+    }""")
+
+
+def _is_red_inline(style: str) -> bool:
+    """Verifica si un style inline tiene fondo rojo."""
     if not style:
         return False
-    # rgb(r, g, b)
     m = re.search(r'background(?:-color)?\s*:\s*rgb\((\d+),\s*(\d+),\s*(\d+)\)', style, re.I)
     if m:
         r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
         return r > 150 and g < 100 and b < 100
-    # #rrggbb
     m = re.search(r'background(?:-color)?\s*:\s*#([0-9a-fA-F]{6})\b', style, re.I)
     if m:
         hx = m.group(1)
         r, g, b = int(hx[0:2], 16), int(hx[2:4], 16), int(hx[4:6], 16)
         return r > 150 and g < 100 and b < 100
-    # #rgb
     m = re.search(r'background(?:-color)?\s*:\s*#([0-9a-fA-F]{3})\b', style, re.I)
     if m:
         hx = m.group(1)
-        r, g, b = int(hx[0] * 2, 16), int(hx[1] * 2, 16), int(hx[2] * 2, 16)
+        r, g, b = int(hx[0]*2, 16), int(hx[1]*2, 16), int(hx[2]*2, 16)
         return r > 150 and g < 100 and b < 100
     return False
 
 
-def parse_red_sensors(html: str) -> list:
-    """Busca tarjetas de sensores con fondo rojo en el HTML del Score Card."""
+def get_red_sensors_html(html: str) -> list:
+    """Detecta sensores rojos buscando estilos inline en el HTML."""
     soup = BeautifulSoup(html, 'html.parser')
     results = []
     seen = set()
-
     for el in soup.find_all(True):
-        style = el.get('style', '')
-        if not _is_red_style(style):
+        if not _is_red_inline(el.get('style', '')):
             continue
         text = el.get_text(separator=' ', strip=True)
         if '°C' not in text:
@@ -75,15 +97,11 @@ def parse_red_sensors(html: str) -> list:
             continue
         seen.add(text)
         results.append({'text': re.sub(r'\s+', ' ', text)})
-
     return results
 
 
-async def prepare_session(page) -> tuple:
-    """
-    Hace login con Playwright, navega hasta el formulario del Score Card,
-    selecciona todos los filtros y devuelve (cookies, form_pairs, action_url).
-    """
+async def navigate_to_scorecard(page):
+    """Login y navega hasta cargar el Score Card."""
     print("  Cargando página de login...")
     await page.goto(TSENSOR_URL, wait_until="domcontentloaded", timeout=30_000)
     await page.wait_for_timeout(2000)
@@ -108,7 +126,6 @@ async def prepare_session(page) -> tuple:
     await page.wait_for_load_state("networkidle", timeout=20_000)
     await page.wait_for_timeout(2000)
 
-    # Después del login redirige al home — ir a TELEMETRÍA
     print("  Haciendo click en TELEMETRÍA...")
     await page.click('a:has-text("TELEMETRÍA"), a:has-text("Telemetría")')
     await page.wait_for_load_state("networkidle", timeout=20_000)
@@ -117,7 +134,7 @@ async def prepare_session(page) -> tuple:
     if DEBUG:
         await page.screenshot(path="debug_login.png")
 
-    # Mostrar Todos para cargar los elementos del formulario
+    # Mostrar Todos para cargar opciones del formulario
     mostrar = await page.query_selector('input[value="Mostrar Todos"], button:has-text("Mostrar Todos")')
     if mostrar:
         await mostrar.click()
@@ -137,10 +154,10 @@ async def prepare_session(page) -> tuple:
             }
         }
     }""")
-    print("  Score Card seleccionado")
+    print("  Score Card seleccionado, esperando que se habilite el formulario...")
     await page.wait_for_timeout(4000)
 
-    # Seleccionar todas las opciones de los filtros
+    # Seleccionar todos los filtros vía JS
     await page.evaluate("""() => {
         for (const sel of document.querySelectorAll('select')) {
             if (sel.id === 'InformeId') continue;
@@ -154,78 +171,43 @@ async def prepare_session(page) -> tuple:
     }""")
 
     if DEBUG:
-        await page.screenshot(path="debug_after_filters.png")
+        await page.screenshot(path="debug_filters.png")
 
-    # Extraer datos del formulario como lista de pares [nombre, valor]
-    form_info = await page.evaluate("""() => {
-        const form = document.querySelector('form');
-        if (!form) return null;
-        const pairs = [];
-        for (const el of form.elements) {
-            if (!el.name) continue;
-            if (el.tagName === 'SELECT') {
-                for (const opt of el.options) {
-                    if (opt.selected) pairs.push([el.name, opt.value]);
-                }
-            } else if (el.type === 'checkbox' || el.type === 'radio') {
-                if (el.checked) pairs.push([el.name, el.value]);
-            } else if (el.type !== 'submit' && el.type !== 'button') {
-                pairs.push([el.name, el.value || '']);
-            }
-        }
-        return { action: form.action || window.location.href, pairs };
-    }""")
+    # Hacer click en Ver Online (submit del formulario)
+    submit_btn = await page.query_selector('button[value="Ver Online"], button[name="boton"]')
+    if not submit_btn:
+        submit_btn = await page.query_selector('input[type="submit"], button[type="submit"]')
 
-    if not form_info:
-        raise RuntimeError("No se encontró el formulario en la página")
+    if submit_btn:
+        btn_info = await page.evaluate(
+            "(el) => ({tag: el.tagName, name: el.name, value: el.value})", submit_btn
+        )
+        print(f"  Click en botón: {btn_info}")
+        await submit_btn.click(force=True)
+    else:
+        print("  ADVERTENCIA: No se encontró el botón submit")
 
-    # Agregar el valor del botón submit
-    form_info['pairs'].append(['boton', 'Ver Online'])
+    # Esperar carga de la respuesta
+    await page.wait_for_load_state("networkidle", timeout=25_000)
+    await page.wait_for_timeout(8000)
 
-    # Cookies de la sesión activa
-    cookies = await page.context.cookies()
+    # Verificar si el Score Card realmente cargó
+    degree_count = await page.evaluate(
+        "() => (document.body.innerText.match(/°C/g) || []).length"
+    )
+    html_size = await page.evaluate("() => document.documentElement.outerHTML.length")
+    print(f"  Lecturas de temperatura (°C) en página: {degree_count}")
+    print(f"  Tamaño HTML en DOM: {html_size:,} bytes")
+    print(f"  URL actual: {page.url}")
 
     if DEBUG:
-        print(f"  Pares de formulario: {len(form_info['pairs'])}")
-        print(f"  Cookies: {len(cookies)}")
-        print(f"  URL de acción: {form_info['action']}")
+        await page.screenshot(path="debug_scorecard.png", full_page=True)
+        html = await page.content()
+        with open("debug_scorecard.html", "w", encoding="utf-8") as f:
+            f.write(html)
+        print("  debug_scorecard.html guardado")
 
-    return cookies, form_info['pairs'], form_info['action']
-
-
-async def fetch_scorecard(cookies: list, form_pairs: list, action_url: str) -> str:
-    """Envía el POST del Score Card directamente con aiohttp usando las cookies de Playwright."""
-    cookie_header = '; '.join(f"{c['name']}={c['value']}" for c in cookies)
-
-    headers = {
-        'Cookie': cookie_header,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': (
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
-            '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-        ),
-        'Referer': action_url,
-        'Origin': 'https://app.tsensor.online',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'es-CL,es;q=0.9',
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            action_url,
-            data=form_pairs,
-            headers=headers,
-            allow_redirects=True,
-            timeout=aiohttp.ClientTimeout(total=60),
-        ) as resp:
-            print(f"  POST Score Card: status={resp.status}, url={resp.url}")
-            html = await resp.text()
-            print(f"  Respuesta HTML: {len(html):,} bytes")
-            if DEBUG:
-                with open("debug_scorecard.html", "w", encoding="utf-8") as f:
-                    f.write(html)
-                print("  HTML guardado: debug_scorecard.html")
-            return html
+    return degree_count
 
 
 async def monitor():
@@ -237,16 +219,19 @@ async def monitor():
             ts = datetime.now().strftime("%H:%M:%S")
             print(f"[{ts}] Iniciando chequeo T-Sensor...")
 
-            # 1. Login + preparar formulario con Playwright
-            cookies, form_pairs, action_url = await prepare_session(page)
+            degree_count = await navigate_to_scorecard(page)
 
-            # 2. POST directo con aiohttp (evita el problema de renderizado headless)
-            print("  Obteniendo Score Card vía HTTP directo...")
-            html = await fetch_scorecard(cookies, form_pairs, action_url)
+            if degree_count < 3:
+                print("  ADVERTENCIA: Score Card no cargó correctamente (pocos °C en DOM)")
 
-            # 3. Parsear HTML en busca de sensores rojos
-            print("  Buscando sensores en rojo...")
-            red_items = parse_red_sensors(html)
+            print("  Buscando sensores en rojo (getComputedStyle)...")
+            red_items = await get_red_sensors_computed(page)
+
+            # Si getComputedStyle no encuentra nada, intentar con inline styles del HTML
+            if not red_items and degree_count >= 3:
+                print("  Buscando sensores en rojo (estilos inline del HTML)...")
+                html = await page.content()
+                red_items = get_red_sensors_html(html)
 
             if DEBUG:
                 print(f"  Sensores rojos encontrados: {len(red_items)}")
