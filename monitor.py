@@ -120,13 +120,26 @@ async def login(page):
         await page.screenshot(path="debug_after_mostrar.png")
         print("URL actual:", page.url)
 
-    # 2. Seleccionar "Score Card" — force=True omite verificaciones de estado
-    await page.select_option('#InformeId', label='Score Card', force=True)
+    # 2. Seleccionar "Score Card" via JavaScript (dispara eventos correctamente)
+    await page.evaluate("""() => {
+        const sel = document.querySelector('#InformeId');
+        for (const opt of sel.options) {
+            if (opt.text.trim() === 'Score Card') {
+                sel.value = opt.value;
+                sel.dispatchEvent(new Event('change', { bubbles: true }));
+                sel.dispatchEvent(new Event('input', { bubbles: true }));
+                break;
+            }
+        }
+    }""")
     print("  Tipo de informe seleccionado: Score Card")
     await page.wait_for_timeout(4000)
 
-    # 3. Click en "Ver Online" — force=True también
-    await page.click('input[value="Ver Online"]', force=True)
+    # 3. Click en "Ver Online" via JavaScript directo
+    await page.evaluate("""() => {
+        const btn = document.querySelector('input[value="Ver Online"]');
+        if (btn) btn.click();
+    }""")
     print("  Click en Ver Online")
 
     await page.wait_for_load_state("networkidle", timeout=20_000)
