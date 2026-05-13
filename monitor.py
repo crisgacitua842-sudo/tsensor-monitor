@@ -34,17 +34,17 @@ async def send_telegram(text: str):
 
 async def get_red_sensors(page):
     """
-    Evalúa el DOM buscando elementos con fondo rojo (sensores fuera de rango).
-    Devuelve lista de dicts con {text, tag, class}.
+    Busca tarjetas de sensores con fondo rojo (temperatura fuera de rango crítico).
+    Solo considera elementos que contengan '°C' para evitar falsos positivos
+    con otros elementos rojos de la UI (logos, iconos, etc).
     """
-    red_elements = await page.evaluate("""() => {
+    sensors = await page.evaluate("""() => {
         function isRed(colorStr) {
             if (!colorStr) return false;
             const m = colorStr.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
             if (!m) return false;
             const [r, g, b] = [+m[1], +m[2], +m[3]];
-            // Rojo clásico: R alto, G y B bajos
-            return r > 150 && g < 120 && b < 120;
+            return r > 150 && g < 100 && b < 100;
         }
 
         const results = [];
@@ -55,19 +55,18 @@ async def get_red_sensors(page):
             if (!isRed(style.backgroundColor)) continue;
 
             const text = (el.innerText || '').trim();
-            // Ignorar contenedores gigantes o vacíos
-            if (!text || text.length > 300 || seen.has(text)) continue;
+
+            // Solo tarjetas de sensores: deben contener °C y un nombre de sensor
+            if (!text.includes('°C')) continue;
+            if (text.length > 400 || text.length < 10) continue;
+            if (seen.has(text)) continue;
             seen.add(text);
 
-            results.push({
-                text: text,
-                tag: el.tagName,
-                cls: el.className
-            });
+            results.push({ text: text.replace(/\\s+/g, ' ') });
         }
         return results;
     }""")
-    return red_elements
+    return sensors
 
 
 async def login(page):
