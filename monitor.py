@@ -191,23 +191,43 @@ async def navigate_to_scorecard(page):
     await page.wait_for_load_state("networkidle", timeout=25_000)
     await page.wait_for_timeout(8000)
 
-    # Verificar si el Score Card realmente cargó
-    degree_count = await page.evaluate(
-        "() => (document.body.innerText.match(/°C/g) || []).length"
-    )
-    html_size = await page.evaluate("() => document.documentElement.outerHTML.length")
-    print(f"  Lecturas de temperatura (°C) en página: {degree_count}")
-    print(f"  Tamaño HTML en DOM: {html_size:,} bytes")
     print(f"  URL actual: {page.url}")
+
+    # Buscar el Score Card en TODOS los frames (puede estar en un iframe)
+    score_frame = None
+    for frame in page.frames:
+        try:
+            count = await frame.evaluate(
+                "() => (document.body.innerText.match(/°C/g) || []).length"
+            )
+            size = await frame.evaluate(
+                "() => document.documentElement.outerHTML.length"
+            )
+            print(f"  Frame [{frame.url[:80]}]: {count} °C, {size:,} bytes")
+            if count > 2 and score_frame is None:
+                score_frame = frame
+        except Exception as ex:
+            print(f"  Frame [{frame.url[:60]}]: no accesible ({ex})")
+
+    if score_frame:
+        print(f"  Score Card en frame: {score_frame.url[:80]}")
+    else:
+        # Si no hay iframe con datos, usar el frame principal
+        degree_count = await page.evaluate(
+            "() => (document.body.innerText.match(/°C/g) || []).length"
+        )
+        print(f"  Usando frame principal ({degree_count} °C)")
+        score_frame = None  # señal de que usaremos page
 
     if DEBUG:
         await page.screenshot(path="debug_scorecard.png", full_page=True)
-        html = await page.content()
+        target = score_frame or page
+        html = await target.content()
         with open("debug_scorecard.html", "w", encoding="utf-8") as f:
             f.write(html)
-        print("  debug_scorecard.html guardado")
+        print(f"  debug_scorecard.html guardado ({len(html):,} bytes)")
 
-    return degree_count
+    return score_frame  # None = usar page; Frame = usar ese frame
 
 
 async def monitor():
@@ -219,22 +239,20 @@ async def monitor():
             ts = datetime.now().strftime("%H:%M:%S")
             print(f"[{ts}] Iniciando chequeo T-Sensor...")
 
-            degree_count = await navigate_to_scorecard(page)
-
-            if degree_count < 3:
-                print("  ADVERTENCIA: Score Card no cargó correctamente (pocos °C en DOM)")
+            score_frame = await navigate_to_scorecard(page)
+            target = score_frame if score_frame else page
 
             print("  Buscando sensores en rojo (getComputedStyle)...")
-            red_items = await get_red_sensors_computed(page)
+            red_items = await get_red_sensors_computed(target)
 
             # Si getComputedStyle no encuentra nada, intentar con inline styles del HTML
-            if not red_items and degree_count >= 3:
+            if not red_items and score_frame is not None:
                 print("  Buscando sensores en rojo (estilos inline del HTML)...")
-                html = await page.content()
+                html = await target.content()
                 red_items = get_red_sensors_html(html)
 
+            print(f"  Sensores rojos encontrados: {len(red_items)}")
             if DEBUG:
-                print(f"  Sensores rojos encontrados: {len(red_items)}")
                 for item in red_items[:5]:
                     print(f"    {item['text'][:120]}")
 
