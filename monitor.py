@@ -135,29 +135,37 @@ async def login(page):
     print("  Tipo de informe seleccionado: Score Card")
     await page.wait_for_timeout(4000)
 
-    # 3. Seleccionar TODOS los items en cada lista y hacer submit del form
-    print("  Seleccionando todos los filtros y enviando formulario...")
+    # 3. Seleccionar todos los filtros e incluir el nombre del botón Ver Online en el POST
+    print("  Preparando formulario completo...")
     await page.evaluate("""() => {
         // Seleccionar todos los options en cada multi-select de filtros
         for (const sel of document.querySelectorAll('select')) {
             if (sel.id === 'InformeId') continue;
             for (const opt of sel.options) opt.selected = true;
         }
-        // Confirmar Score Card en el dropdown de tipo
+        // Confirmar Score Card
         const inf = document.querySelector('#InformeId');
         for (const opt of inf.options) {
             if (opt.text.trim() === 'Score Card') { inf.value = opt.value; break; }
         }
+        // Agregar el nombre/valor del botón Ver Online al form (necesario para que el servidor lo procese)
+        const btn = document.querySelector('input[value="Ver Online"]');
+        if (btn && btn.name) {
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = btn.name;
+            hidden.value = btn.value;
+            document.querySelector('form').appendChild(hidden);
+        }
     }""")
 
     if DEBUG:
-        form_info = await page.evaluate("""() => {
-            const f = document.querySelector('form');
-            return { action: f?.action, method: f?.method, id: f?.id };
+        btn_info = await page.evaluate("""() => {
+            const btn = document.querySelector('input[value="Ver Online"]');
+            return { name: btn?.name, value: btn?.value, type: btn?.type };
         }""")
-        print("  Form info:", form_info)
+        print("  Botón Ver Online:", btn_info)
 
-    # Submit real del formulario (no click de botón)
     await page.evaluate("document.querySelector('form').submit()")
     await page.wait_for_load_state("networkidle", timeout=20_000)
     await page.wait_for_timeout(6000)
