@@ -109,31 +109,25 @@ async def login(page):
     # Navegar al Score Card
     print("  Navegando a Score Card...")
 
-    # 1. Click "Mostrar Todos" y esperar que el dropdown se habilite
+    # 1. Click "Mostrar Todos" y esperar carga de datos
     mostrar = await page.query_selector('input[value="Mostrar Todos"], button:has-text("Mostrar Todos")')
     if mostrar:
         await mostrar.click()
-        print("  Click en Mostrar Todos, esperando que se habilite el dropdown...")
-
-    # Esperar a que #InformeId deje de estar deshabilitado (carga async)
-    await page.wait_for_selector('#InformeId:not([disabled])', timeout=20_000)
-    await page.wait_for_timeout(1000)
+        print("  Click en Mostrar Todos, esperando carga...")
+    await page.wait_for_timeout(6000)
 
     if DEBUG:
         await page.screenshot(path="debug_after_mostrar.png")
         print("URL actual:", page.url)
 
-    # 2. Seleccionar "Score Card" en el dropdown Tipo de Informe
-    await page.select_option('#InformeId', label='Score Card')
+    # 2. Seleccionar "Score Card" — force=True omite verificaciones de estado
+    await page.select_option('#InformeId', label='Score Card', force=True)
     print("  Tipo de informe seleccionado: Score Card")
+    await page.wait_for_timeout(4000)
 
-    # Esperar que "Ver Online" se habilite
-    print("  Esperando que se habilite Ver Online...")
-    await page.wait_for_selector('input[value="Ver Online"]:not([disabled])', timeout=20_000)
-    await page.wait_for_timeout(1000)
-
-    # 3. Click en "Ver Online"
-    await page.click('input[value="Ver Online"]')
+    # 3. Click en "Ver Online" — force=True también
+    await page.click('input[value="Ver Online"]', force=True)
+    print("  Click en Ver Online")
 
     await page.wait_for_load_state("networkidle", timeout=20_000)
     await page.wait_for_timeout(5000)
