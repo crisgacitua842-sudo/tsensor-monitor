@@ -255,19 +255,9 @@ async def monitor():
             score_frame = await navigate_to_scorecard(page)
             target = score_frame if score_frame else page
 
-            print("  Buscando sensores en rojo (getComputedStyle)...")
+            print("  Buscando sensores en rojo...")
             red_items = await get_red_sensors_computed(target)
-
-            # Si getComputedStyle no encuentra nada, intentar con inline styles del HTML
-            if not red_items and score_frame is not None:
-                print("  Buscando sensores en rojo (estilos inline del HTML)...")
-                html = await target.content()
-                red_items = get_red_sensors_html(html)
-
             print(f"  Sensores rojos encontrados: {len(red_items)}")
-            if DEBUG:
-                for item in red_items[:5]:
-                    print(f"    {item['text'][:120]}")
 
             if red_items:
                 now = datetime.now().strftime("%H:%M  %d/%m/%Y")

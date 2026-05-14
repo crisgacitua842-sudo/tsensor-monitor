@@ -44,15 +44,5 @@ jobs:
           TSENSOR_PASS:     ${{ secrets.TSENSOR_PASS }}
           TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          DEBUG:            "true"
+          DEBUG:            "false"
         run: python monitor.py
-
-      - name: Upload debug artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-artifacts
-          path: |
-            *.png
-            *.html
-          if-no-files-found: ignore
