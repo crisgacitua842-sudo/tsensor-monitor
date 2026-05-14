@@ -13,6 +13,39 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 from datetime import datetime
 
+_SENSOR_RE = re.compile(
+    r'(.+?)\s+([-\d.]+)\s*[º°]C\s+'
+    r'Max:\s*([-\d.]+)[º°]C\s+'
+    r'Min:\s*([-\d.]+)[º°]C\s+'
+    r'(\d{1,2}\s+\w+\s+\d{4})\s+'
+    r'(\d{2}:\d{2}:\d{2})\s+'
+    r'T\.\s*Fuera\s+Rango:\s+(\d{2}:\d{2}:\d{2})',
+    re.UNICODE,
+)
+
+
+def _fmt_duration(hms: str) -> str:
+    parts = hms.split(':')
+    h, m = int(parts[0]), int(parts[1])
+    if h > 0:
+        return f"{h}h {m:02d}min"
+    return f"{m}min"
+
+
+def _format_sensor(raw: str) -> str:
+    m = _SENSOR_RE.match(raw.strip())
+    if not m:
+        return f"• {raw}"
+    name, temp, max_t, min_t, fecha, hora, fuera = m.groups()
+    duracion = _fmt_duration(fuera)
+    hora_corta = hora[:5]  # HH:MM
+    return (
+        f"📍 <b>{name.strip()}</b>\n"
+        f"   🌡 Temp: <b>{temp}°C</b>   Rango: {min_t}°C → {max_t}°C\n"
+        f"   ⏱ Fuera de rango: <b>{duracion}</b>\n"
+        f"   🕐 Último dato: {hora_corta}  {fecha}"
+    )
+
 TSENSOR_URL      = os.environ.get("TSENSOR_URL", "https://app.tsensor.online/informes/menu/98")
 TSENSOR_USER     = os.environ.get("TSENSOR_USER")
 TSENSOR_PASS     = os.environ.get("TSENSOR_PASS")
@@ -281,12 +314,16 @@ async def monitor():
 
             if red_items:
                 now = datetime.now().strftime("%H:%M  %d/%m/%Y")
-                msg = f"🚨 <b>Alerta T-Sensor</b> — {now}\n\n"
-                msg += f"<b>{len(red_items)} sensor(es) fuera de rango:</b>\n\n"
+                n = len(red_items)
+                label = "sensor fuera de rango" if n == 1 else "sensores fuera de rango"
+                sep = "─" * 22
+                msg = f"🚨 <b>ALERTA T-SENSOR</b> — {now}\n"
+                msg += f"<b>{n} {label}</b>\n\n"
                 for item in red_items[:20]:
-                    msg += f"• {item['text']}\n"
+                    msg += f"{sep}\n{_format_sensor(item['text'])}\n"
+                msg += sep
                 if len(red_items) > 20:
-                    msg += f"\n… y {len(red_items) - 20} más."
+                    msg += f"\n\n… y {len(red_items) - 20} más."
                 print(f"  ALERTA: {len(red_items)} sensores fuera de rango.")
                 await send_telegram(msg)
             else:
