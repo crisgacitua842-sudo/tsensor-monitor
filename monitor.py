@@ -34,24 +34,41 @@ async def send_telegram(text: str):
 
 
 async def get_red_sensors_computed(page) -> list:
-    """Detecta sensores rojos usando getComputedStyle (requiere estilos CSS cargados)."""
+    """
+    Detecta sensores rojos. Los colores se aplican como background:linear-gradient(hex1,hex2)
+    en el atributo style inline — getComputedStyle.backgroundColor devuelve transparente
+    para gradientes, así que parseamos el atributo style directamente.
+    """
     return await page.evaluate("""() => {
-        function isRed(colorStr) {
-            if (!colorStr) return false;
-            const m = colorStr.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
-            if (!m) return false;
-            const [r, g, b] = [+m[1], +m[2], +m[3]];
+        function isRedHex(hex) {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
             return r > 150 && g < 100 && b < 100;
         }
-        // La página usa ISO-8859-1: símbolo de grado es º (U+00BA), no ° (U+00B0)
+        function hasRedBackground(el) {
+            const style = el.getAttribute('style') || '';
+            if (!style.includes('background')) return false;
+            // Extraer colores hex del gradiente inline
+            const hexColors = style.match(/#[0-9a-fA-F]{6}/g) || [];
+            if (hexColors.some(isRedHex)) return true;
+            // Fallback: background-color sólido vía getComputedStyle
+            const bg = window.getComputedStyle(el).backgroundColor;
+            const m = bg.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+            if (m) {
+                const [r, g, b] = [+m[1], +m[2], +m[3]];
+                return r > 150 && g < 100 && b < 100;
+            }
+            return false;
+        }
         function hasDegreeC(text) {
+            // ISO-8859-1: º = U+00BA (ordinal), ° = U+00B0 (grado)
             return text.includes('\\u00baC') || text.includes('\\u00b0C');
         }
         const results = [];
         const seen = new Set();
         for (const el of document.querySelectorAll('*')) {
-            const style = window.getComputedStyle(el);
-            if (!isRed(style.backgroundColor)) continue;
+            if (!hasRedBackground(el)) continue;
             const text = (el.innerText || '').trim();
             if (!hasDegreeC(text)) continue;
             if (text.length > 400 || text.length < 10) continue;
