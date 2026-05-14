@@ -43,13 +43,17 @@ async def get_red_sensors_computed(page) -> list:
             const [r, g, b] = [+m[1], +m[2], +m[3]];
             return r > 150 && g < 100 && b < 100;
         }
+        // La página usa ISO-8859-1: símbolo de grado es º (U+00BA), no ° (U+00B0)
+        function hasDegreeC(text) {
+            return text.includes('\\u00baC') || text.includes('\\u00b0C');
+        }
         const results = [];
         const seen = new Set();
         for (const el of document.querySelectorAll('*')) {
             const style = window.getComputedStyle(el);
             if (!isRed(style.backgroundColor)) continue;
             const text = (el.innerText || '').trim();
-            if (!text.includes('°C')) continue;
+            if (!hasDegreeC(text)) continue;
             if (text.length > 400 || text.length < 10) continue;
             if (seen.has(text)) continue;
             seen.add(text);
@@ -89,7 +93,7 @@ def get_red_sensors_html(html: str) -> list:
         if not _is_red_inline(el.get('style', '')):
             continue
         text = el.get_text(separator=' ', strip=True)
-        if '°C' not in text:
+        if '°C' not in text and 'ºC' not in text:
             continue
         if len(text) > 400 or len(text) < 10:
             continue
@@ -203,11 +207,12 @@ async def navigate_to_scorecard(page):
     print(f"  URL actual: {page.url}")
 
     # Buscar el Score Card en TODOS los frames (puede estar en un iframe)
+    # Nota: la página usa ISO-8859-1, el símbolo grado es º (U+00BA), no ° (U+00B0)
     score_frame = None
     for frame in page.frames:
         try:
             count = await frame.evaluate(
-                "() => (document.body.innerText.match(/°C/g) || []).length"
+                "() => (document.body.innerText.match(/[\\u00ba\\u00b0]C/g) || []).length"
             )
             size = await frame.evaluate(
                 "() => document.documentElement.outerHTML.length"
@@ -221,12 +226,11 @@ async def navigate_to_scorecard(page):
     if score_frame:
         print(f"  Score Card en frame: {score_frame.url[:80]}")
     else:
-        # Si no hay iframe con datos, usar el frame principal
         degree_count = await page.evaluate(
-            "() => (document.body.innerText.match(/°C/g) || []).length"
+            "() => (document.body.innerText.match(/[\\u00ba\\u00b0]C/g) || []).length"
         )
-        print(f"  Usando frame principal ({degree_count} °C)")
-        score_frame = None  # señal de que usaremos page
+        print(f"  Usando frame principal ({degree_count} lecturas ºC)")
+        score_frame = None
 
     if DEBUG:
         await page.screenshot(path="debug_scorecard.png", full_page=True)
