@@ -48,10 +48,13 @@ async def get_red_sensors_computed(page) -> list:
         }
         function hasRedBackground(el) {
             const style = el.getAttribute('style') || '';
-            if (!style.includes('background')) return false;
-            // Extraer colores hex del gradiente inline
-            const hexColors = style.match(/#[0-9a-fA-F]{6}/g) || [];
-            if (hexColors.some(isRedHex)) return true;
+            // Sensores en rojo usan animación CSS "redPulse" (no un color estático)
+            if (style.includes('redPulse')) return true;
+            // Fallback: colores hex en gradiente inline
+            if (style.includes('background')) {
+                const hexColors = style.match(/#[0-9a-fA-F]{6}/g) || [];
+                if (hexColors.some(isRedHex)) return true;
+            }
             // Fallback: background-color sólido vía getComputedStyle
             const bg = window.getComputedStyle(el).backgroundColor;
             const m = bg.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
