@@ -134,17 +134,26 @@ async def navigate_to_scorecard(page):
     if DEBUG:
         await page.screenshot(path="debug_login.png")
 
-    # Mostrar Todos para cargar opciones del formulario
-    mostrar = await page.query_selector('input[value="Mostrar Todos"], button:has-text("Mostrar Todos")')
+    # "Mostrar Todos" es un <a> con javascript:update_select(...), NO un button/input
+    mostrar = await page.query_selector(
+        'a:has-text("Mostrar Todos"), input[value="Mostrar Todos"], button:has-text("Mostrar Todos")'
+    )
     if mostrar:
         await mostrar.click()
-        print("  Click en Mostrar Todos, esperando carga...")
-    await page.wait_for_timeout(6000)
+        print("  Click en Mostrar Todos (AJAX cascadeante), esperando carga...")
+    else:
+        print("  ADVERTENCIA: No se encontró Mostrar Todos")
+    # Esperar a que el AJAX cascadeante llene todos los dropdowns
+    await page.wait_for_timeout(8000)
 
-    # Seleccionar Score Card vía JS
+    if DEBUG:
+        await page.screenshot(path="debug_after_mostrar.png")
+
+    # Seleccionar Score Card en #InformeId
     await page.evaluate("""() => {
         const sel = document.querySelector('#InformeId');
         if (!sel) return;
+        sel.disabled = false;
         for (const opt of sel.options) {
             if (opt.text.trim() === 'Score Card') {
                 sel.value = opt.value;
@@ -154,38 +163,38 @@ async def navigate_to_scorecard(page):
             }
         }
     }""")
-    print("  Score Card seleccionado, esperando que se habilite el formulario...")
-    await page.wait_for_timeout(4000)
+    print("  Score Card seleccionado")
 
-    # Seleccionar todos los filtros vía JS
-    await page.evaluate("""() => {
-        for (const sel of document.querySelectorAll('select')) {
-            if (sel.id === 'InformeId') continue;
-            for (const opt of sel.options) opt.selected = true;
-        }
-        const inf = document.querySelector('#InformeId');
-        if (!inf) return;
-        for (const opt of inf.options) {
-            if (opt.text.trim() === 'Score Card') { inf.value = opt.value; break; }
-        }
-    }""")
+    # Esperar a que el JS habilite el botón Ver Online
+    try:
+        await page.wait_for_selector(
+            'button#ver_online2:not([disabled]), button[name="boton"]:not([disabled])',
+            timeout=10_000
+        )
+        print("  Botón Ver Online habilitado")
+    except Exception:
+        print("  Ver Online sigue deshabilitado — habilitando vía JS")
+        await page.evaluate("""() => {
+            const btn = document.querySelector('button#ver_online2, button[name="boton"]');
+            if (btn) { btn.disabled = false; btn.removeAttribute('disabled'); }
+        }""")
 
     if DEBUG:
         await page.screenshot(path="debug_filters.png")
 
-    # Hacer click en Ver Online (submit del formulario)
-    submit_btn = await page.query_selector('button[value="Ver Online"], button[name="boton"]')
-    if not submit_btn:
-        submit_btn = await page.query_selector('input[type="submit"], button[type="submit"]')
-
+    # Click en Ver Online (ya habilitado — sin force)
+    submit_btn = await page.query_selector(
+        'button#ver_online2, button[name="boton"][value="Ver Online"]'
+    )
     if submit_btn:
         btn_info = await page.evaluate(
-            "(el) => ({tag: el.tagName, name: el.name, value: el.value})", submit_btn
+            "(el) => ({tag: el.tagName, id: el.id, disabled: el.disabled, value: el.value})",
+            submit_btn
         )
-        print(f"  Click en botón: {btn_info}")
-        await submit_btn.click(force=True)
+        print(f"  Click en Ver Online: {btn_info}")
+        await submit_btn.click()
     else:
-        print("  ADVERTENCIA: No se encontró el botón submit")
+        print("  ADVERTENCIA: No se encontró Ver Online")
 
     # Esperar carga de la respuesta
     await page.wait_for_load_state("networkidle", timeout=25_000)
