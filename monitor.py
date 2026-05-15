@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from playwright.async_api import async_playwright
 
 CHILE_TZ = ZoneInfo("America/Santiago")
+MAX_ALERT_AGE_DAYS = 7
 
 _SENSOR_RE = re.compile(
     r'(.+?)\s+([-\d.]+)\s*[º°]C\s+'
@@ -75,6 +76,22 @@ GH_HEADERS = {
     "Authorization": f"token {GITHUB_TOKEN}",
     "Accept": "application/vnd.github.v3+json",
 }
+
+
+def _clean_stale_alerts(alerted: dict) -> dict:
+    """Elimina sensores que llevan más de MAX_ALERT_AGE_DAYS en estado alertado."""
+    now = datetime.now(CHILE_TZ)
+    clean = {}
+    for name, timestamp in alerted.items():
+        try:
+            age = (now - datetime.fromisoformat(timestamp)).days
+            if age < MAX_ALERT_AGE_DAYS:
+                clean[name] = timestamp
+            else:
+                print(f"  Estado expirado limpiado: {name} (alertado hace {age} días)")
+        except Exception:
+            pass  # timestamp inválido, descartar
+    return clean
 
 
 async def read_state() -> dict:
@@ -314,9 +331,9 @@ async def monitor():
             ts = now_chile.strftime("%H:%M:%S")
             print(f"[{ts}] Iniciando chequeo T-Sensor...")
 
-            # Leer estado anterior
+            # Leer estado anterior y limpiar entradas expiradas
             state = await read_state()
-            alerted = state.get("alerted", {})
+            alerted = _clean_stale_alerts(state.get("alerted", {}))
 
             score_frame = await navigate_to_scorecard(page)
             target = score_frame if score_frame else page
