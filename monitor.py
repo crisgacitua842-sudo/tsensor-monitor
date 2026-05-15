@@ -66,6 +66,7 @@ TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GITHUB_TOKEN     = os.environ.get("GITHUB_TOKEN")
 GITHUB_REPO      = os.environ.get("GITHUB_REPO", "crisgacitua842-sudo/tsensor-monitor")
+HC_PING_URL      = os.environ.get("HC_PING_URL", "https://hc-ping.com/d8f6c62d-a1e4-4b14-8d1b-74fee36859af")
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
 
 STATE_FILE = "state.json"
@@ -107,6 +108,19 @@ async def write_state(state: dict):
                 print(f"  Error guardando estado: {resp.status} {body[:200]}")
             else:
                 print("  Estado guardado en GitHub.")
+
+
+async def ping_healthcheck(suffix: str = ""):
+    """Notifica a healthchecks.io que el monitor corrió. /fail si hubo error."""
+    if not HC_PING_URL:
+        return
+    url = HC_PING_URL.rstrip("/") + suffix
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                print(f"  Healthcheck ping{'  ' + suffix if suffix else ' OK'}: {resp.status}")
+    except Exception as e:
+        print(f"  Healthcheck ping falló: {e}")
 
 
 async def send_telegram(text: str):
@@ -352,10 +366,23 @@ async def monitor():
             state["alerted"] = alerted
             await write_state(state)
 
+            # Confirmar a healthchecks.io que el run fue exitoso
+            await ping_healthcheck()
+
         except Exception as e:
-            print(f"Error: {e}")
             import traceback
             traceback.print_exc()
+            await ping_healthcheck("/fail")
+            try:
+                now_str = datetime.now(CHILE_TZ).strftime("%H:%M  %d/%m/%Y")
+                await send_telegram(
+                    f"⚠️ <b>ERROR en monitor T-Sensor</b> — {now_str}\n"
+                    f"El sistema de alertas falló con el siguiente error:\n"
+                    f"<code>{str(e)[:300]}</code>\n\n"
+                    f"Revisa GitHub Actions para más detalles."
+                )
+            except Exception:
+                pass
             if DEBUG:
                 try:
                     await page.screenshot(path="debug_error.png")
