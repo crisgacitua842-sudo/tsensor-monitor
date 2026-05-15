@@ -378,7 +378,7 @@ async def monitor():
                 await send_telegram(
                     f"⚠️ <b>ERROR en monitor T-Sensor</b> — {now_str}\n"
                     f"El sistema de alertas falló con el siguiente error:\n"
-                    f"<code>{str(e)[:300]}</code>\n\n"
+                    f"<code>{str(e)[:3500]}</code>\n\n"
                     f"Revisa GitHub Actions para más detalles."
                 )
             except Exception:
