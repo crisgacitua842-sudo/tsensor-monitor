@@ -2,16 +2,21 @@
 """
 T-Sensor temperature monitor
 Sends Telegram alerts when any sensor turns red (out of range).
+Only alerts once per incident — re-alerts if sensor recovers then goes red again.
 """
 
 import asyncio
+import base64
 import os
 import re
 import json
 import aiohttp
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
 from datetime import datetime
+from zoneinfo import ZoneInfo
+from playwright.async_api import async_playwright
+
+CHILE_TZ = ZoneInfo("America/Santiago")
 
 _SENSOR_RE = re.compile(
     r'(.+?)\s+([-\d.]+)\s*[º°]C\s+'
@@ -32,6 +37,13 @@ def _fmt_duration(hms: str) -> str:
     return f"{m}min"
 
 
+def _extract_name(raw: str) -> str:
+    m = _SENSOR_RE.match(raw.strip())
+    if m:
+        return m.group(1).strip()
+    return raw.strip().splitlines()[0].strip()[:100]
+
+
 def _format_sensor(raw: str) -> str:
     m = _SENSOR_RE.match(raw.strip())
     if not m:
@@ -46,12 +58,55 @@ def _format_sensor(raw: str) -> str:
         f"   🕐 Último dato: {hora_corta}  {fecha}"
     )
 
+
 TSENSOR_URL      = os.environ.get("TSENSOR_URL", "https://app.tsensor.online/informes/menu/98")
 TSENSOR_USER     = os.environ.get("TSENSOR_USER")
 TSENSOR_PASS     = os.environ.get("TSENSOR_PASS")
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+GITHUB_TOKEN     = os.environ.get("GITHUB_TOKEN")
+GITHUB_REPO      = os.environ.get("GITHUB_REPO", "crisgacitua842-sudo/tsensor-monitor")
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
+
+STATE_FILE = "state.json"
+GH_API = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{STATE_FILE}"
+GH_HEADERS = {
+    "Authorization": f"token {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github.v3+json",
+}
+
+
+async def read_state() -> dict:
+    """Lee el estado de sensores alertados desde el repositorio GitHub."""
+    if not GITHUB_TOKEN:
+        return {"alerted": {}}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(GH_API, headers=GH_HEADERS) as resp:
+            if resp.status == 404:
+                return {"alerted": {}}
+            data = await resp.json()
+            content = base64.b64decode(data["content"]).decode("utf-8")
+            state = json.loads(content)
+            state["_sha"] = data["sha"]
+            return state
+
+
+async def write_state(state: dict):
+    """Guarda el estado actualizado en el repositorio GitHub."""
+    if not GITHUB_TOKEN:
+        return
+    sha = state.pop("_sha", None)
+    content = base64.b64encode(json.dumps(state, indent=2, ensure_ascii=False).encode()).decode()
+    payload = {"message": "chore: update sensor state [skip ci]", "content": content}
+    if sha:
+        payload["sha"] = sha
+    async with aiohttp.ClientSession() as session:
+        async with session.put(GH_API, headers=GH_HEADERS, json=payload) as resp:
+            if resp.status not in (200, 201):
+                body = await resp.text()
+                print(f"  Error guardando estado: {resp.status} {body[:200]}")
+            else:
+                print("  Estado guardado en GitHub.")
 
 
 async def send_telegram(text: str):
@@ -63,15 +118,10 @@ async def send_telegram(text: str):
                 body = await resp.text()
                 print(f"Error Telegram {resp.status}: {body}")
             else:
-                print("Alerta enviada por Telegram.")
+                print("  Alerta enviada por Telegram.")
 
 
 async def get_red_sensors_computed(page) -> list:
-    """
-    Detecta sensores rojos. Los colores se aplican como background:linear-gradient(hex1,hex2)
-    en el atributo style inline — getComputedStyle.backgroundColor devuelve transparente
-    para gradientes, así que parseamos el atributo style directamente.
-    """
     return await page.evaluate("""() => {
         function isRedHex(hex) {
             const r = parseInt(hex.slice(1, 3), 16);
@@ -81,14 +131,11 @@ async def get_red_sensors_computed(page) -> list:
         }
         function hasRedBackground(el) {
             const style = el.getAttribute('style') || '';
-            // Sensores en rojo usan animación CSS "redPulse" (no un color estático)
             if (style.includes('redPulse')) return true;
-            // Fallback: colores hex en gradiente inline
             if (style.includes('background')) {
                 const hexColors = style.match(/#[0-9a-fA-F]{6}/g) || [];
                 if (hexColors.some(isRedHex)) return true;
             }
-            // Fallback: background-color sólido vía getComputedStyle
             const bg = window.getComputedStyle(el).backgroundColor;
             const m = bg.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
             if (m) {
@@ -98,7 +145,6 @@ async def get_red_sensors_computed(page) -> list:
             return false;
         }
         function hasDegreeC(text) {
-            // ISO-8859-1: º = U+00BA (ordinal), ° = U+00B0 (grado)
             return text.includes('\\u00baC') || text.includes('\\u00b0C');
         }
         const results = [];
@@ -116,54 +162,12 @@ async def get_red_sensors_computed(page) -> list:
     }""")
 
 
-def _is_red_inline(style: str) -> bool:
-    """Verifica si un style inline tiene fondo rojo."""
-    if not style:
-        return False
-    m = re.search(r'background(?:-color)?\s*:\s*rgb\((\d+),\s*(\d+),\s*(\d+)\)', style, re.I)
-    if m:
-        r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        return r > 150 and g < 100 and b < 100
-    m = re.search(r'background(?:-color)?\s*:\s*#([0-9a-fA-F]{6})\b', style, re.I)
-    if m:
-        hx = m.group(1)
-        r, g, b = int(hx[0:2], 16), int(hx[2:4], 16), int(hx[4:6], 16)
-        return r > 150 and g < 100 and b < 100
-    m = re.search(r'background(?:-color)?\s*:\s*#([0-9a-fA-F]{3})\b', style, re.I)
-    if m:
-        hx = m.group(1)
-        r, g, b = int(hx[0]*2, 16), int(hx[1]*2, 16), int(hx[2]*2, 16)
-        return r > 150 and g < 100 and b < 100
-    return False
-
-
-def get_red_sensors_html(html: str) -> list:
-    """Detecta sensores rojos buscando estilos inline en el HTML."""
-    soup = BeautifulSoup(html, 'html.parser')
-    results = []
-    seen = set()
-    for el in soup.find_all(True):
-        if not _is_red_inline(el.get('style', '')):
-            continue
-        text = el.get_text(separator=' ', strip=True)
-        if '°C' not in text and 'ºC' not in text:
-            continue
-        if len(text) > 400 or len(text) < 10:
-            continue
-        if text in seen:
-            continue
-        seen.add(text)
-        results.append({'text': re.sub(r'\s+', ' ', text)})
-    return results
-
-
 async def navigate_to_scorecard(page):
     """Login y navega hasta cargar el Score Card."""
     print("  Cargando página de login...")
     await page.goto(TSENSOR_URL, wait_until="domcontentloaded", timeout=30_000)
     await page.wait_for_timeout(2000)
 
-    # Usuario
     for sel in ['input[type="text"]', 'input[name*="user" i]',
                 'input[placeholder*="usuario" i]', 'input[id*="user" i]']:
         el = await page.query_selector(sel)
@@ -171,7 +175,6 @@ async def navigate_to_scorecard(page):
             await el.fill(TSENSOR_USER)
             break
 
-    # Contraseña y login
     await page.fill('input[type="password"]', TSENSOR_PASS)
     for sel in ['button:has-text("ENTRAR")', 'button:has-text("Entrar")',
                 'button[type="submit"]', 'input[type="submit"]']:
@@ -191,7 +194,6 @@ async def navigate_to_scorecard(page):
     if DEBUG:
         await page.screenshot(path="debug_login.png")
 
-    # "Mostrar Todos" es un <a> con javascript:update_select(...), NO un button/input
     mostrar = await page.query_selector(
         'a:has-text("Mostrar Todos"), input[value="Mostrar Todos"], button:has-text("Mostrar Todos")'
     )
@@ -200,13 +202,11 @@ async def navigate_to_scorecard(page):
         print("  Click en Mostrar Todos (AJAX cascadeante), esperando carga...")
     else:
         print("  ADVERTENCIA: No se encontró Mostrar Todos")
-    # Esperar a que el AJAX cascadeante llene todos los dropdowns
     await page.wait_for_timeout(8000)
 
     if DEBUG:
         await page.screenshot(path="debug_after_mostrar.png")
 
-    # Seleccionar Score Card en #InformeId
     await page.evaluate("""() => {
         const sel = document.querySelector('#InformeId');
         if (!sel) return;
@@ -222,7 +222,6 @@ async def navigate_to_scorecard(page):
     }""")
     print("  Score Card seleccionado")
 
-    # Esperar a que el JS habilite el botón Ver Online
     try:
         await page.wait_for_selector(
             'button#ver_online2:not([disabled]), button[name="boton"]:not([disabled])',
@@ -239,7 +238,6 @@ async def navigate_to_scorecard(page):
     if DEBUG:
         await page.screenshot(path="debug_filters.png")
 
-    # Click en Ver Online (ya habilitado — sin force)
     submit_btn = await page.query_selector(
         'button#ver_online2, button[name="boton"][value="Ver Online"]'
     )
@@ -253,14 +251,11 @@ async def navigate_to_scorecard(page):
     else:
         print("  ADVERTENCIA: No se encontró Ver Online")
 
-    # Esperar carga de la respuesta
     await page.wait_for_load_state("networkidle", timeout=25_000)
     await page.wait_for_timeout(8000)
 
     print(f"  URL actual: {page.url}")
 
-    # Buscar el Score Card en TODOS los frames (puede estar en un iframe)
-    # Nota: la página usa ISO-8859-1, el símbolo grado es º (U+00BA), no ° (U+00B0)
     score_frame = None
     for frame in page.frames:
         try:
@@ -283,7 +278,6 @@ async def navigate_to_scorecard(page):
             "() => (document.body.innerText.match(/[\\u00ba\\u00b0]C/g) || []).length"
         )
         print(f"  Usando frame principal ({degree_count} lecturas ºC)")
-        score_frame = None
 
     if DEBUG:
         await page.screenshot(path="debug_scorecard.png", full_page=True)
@@ -293,7 +287,7 @@ async def navigate_to_scorecard(page):
             f.write(html)
         print(f"  debug_scorecard.html guardado ({len(html):,} bytes)")
 
-    return score_frame  # None = usar page; Frame = usar ese frame
+    return score_frame
 
 
 async def monitor():
@@ -302,8 +296,13 @@ async def monitor():
         page = await browser.new_page(viewport={"width": 1440, "height": 900})
 
         try:
-            ts = datetime.now().strftime("%H:%M:%S")
+            now_chile = datetime.now(CHILE_TZ)
+            ts = now_chile.strftime("%H:%M:%S")
             print(f"[{ts}] Iniciando chequeo T-Sensor...")
+
+            # Leer estado anterior
+            state = await read_state()
+            alerted = state.get("alerted", {})
 
             score_frame = await navigate_to_scorecard(page)
             target = score_frame if score_frame else page
@@ -312,22 +311,46 @@ async def monitor():
             red_items = await get_red_sensors_computed(target)
             print(f"  Sensores rojos encontrados: {len(red_items)}")
 
-            if red_items:
-                now = datetime.now().strftime("%H:%M  %d/%m/%Y")
-                n = len(red_items)
+            # Nombres de sensores actualmente en rojo
+            current_red = {_extract_name(item["text"]): item for item in red_items}
+
+            # Sensores recuperados: estaban en alerted pero ya no están en rojo
+            recovered = [name for name in alerted if name not in current_red]
+            for name in recovered:
+                print(f"  ✅ Recuperado: {name}")
+                del alerted[name]
+
+            # Nuevos sensores en rojo: están en rojo pero no habían sido alertados
+            new_red = {name: item for name, item in current_red.items() if name not in alerted}
+
+            if new_red:
+                now_str = now_chile.strftime("%H:%M  %d/%m/%Y")
+                n = len(new_red)
                 label = "sensor fuera de rango" if n == 1 else "sensores fuera de rango"
                 sep = "─" * 22
-                msg = f"🚨 <b>ALERTA T-SENSOR</b> — {now}\n"
+                msg = f"🚨 <b>ALERTA T-SENSOR</b> — {now_str}\n"
                 msg += f"<b>{n} {label}</b>\n\n"
-                for item in red_items[:20]:
+                for name, item in list(new_red.items())[:20]:
                     msg += f"{sep}\n{_format_sensor(item['text'])}\n"
                 msg += sep
-                if len(red_items) > 20:
-                    msg += f"\n\n… y {len(red_items) - 20} más."
-                print(f"  ALERTA: {len(red_items)} sensores fuera de rango.")
+                if len(new_red) > 20:
+                    msg += f"\n\n… y {len(new_red) - 20} más."
+                print(f"  ALERTA: {n} sensores nuevos en rojo.")
                 await send_telegram(msg)
+
+                # Registrar como alertados
+                alert_time = now_chile.isoformat()
+                for name in new_red:
+                    alerted[name] = alert_time
             else:
-                print("  Todo normal — sin alertas.")
+                if current_red:
+                    print(f"  {len(current_red)} sensor(es) en rojo ya notificado(s) — sin nueva alerta.")
+                else:
+                    print("  Todo normal — sin alertas.")
+
+            # Guardar estado actualizado
+            state["alerted"] = alerted
+            await write_state(state)
 
         except Exception as e:
             print(f"Error: {e}")

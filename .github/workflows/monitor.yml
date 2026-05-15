@@ -2,8 +2,11 @@ name: Monitor T-Sensor
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # Cada 10 minutos
-  workflow_dispatch:           # También se puede lanzar manualmente
+    - cron: '*/10 * * * *'   # Cada 10 minutos (disparado por cron-job.org vía workflow_dispatch)
+  workflow_dispatch:           # Disparado por cron-job.org
+
+permissions:
+  contents: write              # Necesario para guardar state.json en el repo
 
 jobs:
   monitor:
@@ -44,5 +47,7 @@ jobs:
           TSENSOR_PASS:     ${{ secrets.TSENSOR_PASS }}
           TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:      "crisgacitua842-sudo/tsensor-monitor"
           DEBUG:            "false"
         run: python monitor.py
