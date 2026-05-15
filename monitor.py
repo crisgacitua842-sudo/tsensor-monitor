@@ -323,7 +323,13 @@ async def monitor():
 
             print("  Buscando sensores en rojo...")
             red_items = await get_red_sensors_computed(target)
-            print(f"  Sensores rojos encontrados: {len(red_items)}")
+            print(f"  Sensores rojos encontrados (1er scan): {len(red_items)}")
+
+            # Si el primer scan da 0, esperamos y confirmamos para evitar falsos negativos
+            if not red_items:
+                await (score_frame or page).wait_for_timeout(5000)
+                red_items = await get_red_sensors_computed(target)
+                print(f"  Sensores rojos encontrados (2do scan): {len(red_items)}")
 
             # Nombres de sensores actualmente en rojo
             current_red = {_extract_name(item["text"]): item for item in red_items}
