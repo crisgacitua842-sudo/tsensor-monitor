@@ -1,9 +1,7 @@
 name: Monitor T-Sensor
 
 on:
-  schedule:
-    - cron: '*/10 * * * *'   # Cada 10 minutos (disparado por cron-job.org vía workflow_dispatch)
-  workflow_dispatch:           # Disparado por cron-job.org
+  workflow_dispatch:           # Disparado por cron-job.org cada 10 minutos
 
 permissions:
   contents: write              # Necesario para guardar state.json en el repo
