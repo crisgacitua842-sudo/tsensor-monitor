@@ -196,7 +196,7 @@ async def get_red_sensors_computed(page) -> list:
 async def navigate_to_scorecard(page):
     """Login y navega hasta cargar el Score Card."""
     print("  Cargando página de login...")
-    await page.goto(TSENSOR_URL, wait_until="domcontentloaded", timeout=30_000)
+    await page.goto(TSENSOR_URL, wait_until="domcontentloaded", timeout=60_000)
     await page.wait_for_timeout(2000)
 
     for sel in ['input[type="text"]', 'input[name*="user" i]',
@@ -321,17 +321,20 @@ async def navigate_to_scorecard(page):
     return score_frame
 
 
-async def monitor():
+MAX_RETRIES = 3
+RETRY_DELAY_SECS = 15
+
+
+async def _run_attempt(attempt: int) -> None:
+    """Ejecuta un intento completo de chequeo usando su propio browser."""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page(viewport={"width": 1440, "height": 900})
-
         try:
             now_chile = datetime.now(CHILE_TZ)
             ts = now_chile.strftime("%H:%M:%S")
-            print(f"[{ts}] Iniciando chequeo T-Sensor...")
+            print(f"[{ts}] Intento {attempt}/{MAX_RETRIES} — Iniciando chequeo T-Sensor...")
 
-            # Leer estado anterior y limpiar entradas expiradas
             state = await read_state()
             alerted = _clean_stale_alerts(state.get("alerted", {}))
 
@@ -342,22 +345,18 @@ async def monitor():
             red_items = await get_red_sensors_computed(target)
             print(f"  Sensores rojos encontrados (1er scan): {len(red_items)}")
 
-            # Si el primer scan da 0, esperamos y confirmamos para evitar falsos negativos
             if not red_items:
                 await (score_frame or page).wait_for_timeout(5000)
                 red_items = await get_red_sensors_computed(target)
                 print(f"  Sensores rojos encontrados (2do scan): {len(red_items)}")
 
-            # Nombres de sensores actualmente en rojo
             current_red = {_extract_name(item["text"]): item for item in red_items}
 
-            # Sensores recuperados: estaban en alerted pero ya no están en rojo
             recovered = [name for name in alerted if name not in current_red]
             for name in recovered:
                 print(f"  ✅ Recuperado: {name}")
                 del alerted[name]
 
-            # Nuevos sensores en rojo: están en rojo pero no habían sido alertados
             new_red = {name: item for name, item in current_red.items() if name not in alerted}
 
             if new_red:
@@ -375,7 +374,6 @@ async def monitor():
                 print(f"  ALERTA: {n} sensores nuevos en rojo.")
                 await send_telegram(msg)
 
-                # Registrar como alertados
                 alert_time = now_chile.isoformat()
                 for name in new_red:
                     alerted[name] = alert_time
@@ -385,27 +383,11 @@ async def monitor():
                 else:
                     print("  Todo normal — sin alertas.")
 
-            # Guardar estado actualizado
             state["alerted"] = alerted
             await write_state(state)
-
-            # Confirmar a healthchecks.io que el run fue exitoso
             await ping_healthcheck()
 
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            await ping_healthcheck("/fail")
-            try:
-                now_str = datetime.now(CHILE_TZ).strftime("%H:%M  %d/%m/%Y")
-                await send_telegram(
-                    f"⚠️ <b>ERROR en monitor T-Sensor</b> — {now_str}\n"
-                    f"El sistema de alertas falló con el siguiente error:\n"
-                    f"<code>{str(e)[:3500]}</code>\n\n"
-                    f"Revisa GitHub Actions para más detalles."
-                )
-            except Exception:
-                pass
+        except Exception:
             if DEBUG:
                 try:
                     await page.screenshot(path="debug_error.png")
@@ -414,6 +396,36 @@ async def monitor():
             raise
         finally:
             await browser.close()
+
+
+async def monitor():
+    import traceback
+    last_error: Exception | None = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            await _run_attempt(attempt)
+            return
+        except Exception as e:
+            last_error = e
+            traceback.print_exc()
+            if attempt < MAX_RETRIES:
+                print(f"  Intento {attempt} falló. Reintentando en {RETRY_DELAY_SECS}s...")
+                await asyncio.sleep(RETRY_DELAY_SECS)
+
+    # Los 3 intentos fallaron — notificar y abortar
+    await ping_healthcheck("/fail")
+    try:
+        now_str = datetime.now(CHILE_TZ).strftime("%H:%M  %d/%m/%Y")
+        await send_telegram(
+            f"⚠️ <b>ERROR en monitor T-Sensor</b> — {now_str}\n"
+            f"El sistema falló tras {MAX_RETRIES} intentos:\n"
+            f"<code>{str(last_error)[:3500]}</code>\n\n"
+            f"Revisa GitHub Actions para más detalles."
+        )
+    except Exception:
+        pass
+    raise last_error
 
 
 if __name__ == "__main__":
