@@ -25,13 +25,20 @@ _SENSOR_RE = re.compile(
     r'Min:\s*([-\d.]+)[º°]C\s+'
     r'(\d{1,2}\s+\w+\s+\d{4})\s+'
     r'(\d{2}:\d{2}:\d{2})\s+'
-    r'T\.\s*Fuera\s+Rango:\s+(\d{2}:\d{2}:\d{2})',
-    re.UNICODE,
+    r'T\.\s*Fuera(?:\s+Rango)?:\s+'
+    r'(\d{2}:\d{2}:\d{2}|\d+\s+D[íiï][^\s]*\s+\d+\s+Min(?:uto[s]?)?)',
+    re.UNICODE | re.IGNORECASE,
 )
 
 
-def _fmt_duration(hms: str) -> str:
-    parts = hms.split(':')
+def _fmt_duration(raw: str) -> str:
+    day_m = re.match(r'(\d+)\s+D', raw, re.IGNORECASE)
+    if day_m:
+        mins_m = re.search(r'(\d+)\s+Min', raw, re.IGNORECASE)
+        d = int(day_m.group(1))
+        m = int(mins_m.group(1)) if mins_m else 0
+        return f"{d}d {m:02d}min"
+    parts = raw.split(':')
     h, m = int(parts[0]), int(parts[1])
     if h > 0:
         return f"{h}h {m:02d}min"
@@ -42,7 +49,12 @@ def _extract_name(raw: str) -> str:
     m = _SENSOR_RE.match(raw.strip())
     if m:
         return m.group(1).strip()
-    return raw.strip().splitlines()[0].strip()[:100]
+    # Fallback robusto: extraer solo el nombre antes de la temperatura
+    clean = re.sub(r'\s+', ' ', raw.strip())
+    name_m = re.match(r'^(.+?)\s+[-\d.]+\s*[º°]C', clean)
+    if name_m:
+        return name_m.group(1).strip()[:100]
+    return clean.splitlines()[0].strip()[:100]
 
 
 def _format_sensor(raw: str) -> str:
