@@ -7,9 +7,11 @@ Only alerts once per incident — re-alerts if sensor recovers then goes red aga
 
 import asyncio
 import base64
+import html
 import os
 import re
 import json
+import traceback
 import aiohttp
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -60,15 +62,15 @@ def _extract_name(raw: str) -> str:
 def _format_sensor(raw: str) -> str:
     m = _SENSOR_RE.match(raw.strip())
     if not m:
-        return f"• {raw}"
+        return f"• {html.escape(raw)}"
     name, temp, max_t, min_t, fecha, hora, fuera = m.groups()
     duracion = _fmt_duration(fuera)
     hora_corta = hora[:5]  # HH:MM
     return (
-        f"📍 <b>{name.strip()}</b>\n"
-        f"   🌡 Temp: <b>{temp}°C</b>   Rango: {min_t}°C → {max_t}°C\n"
-        f"   ⏱ Fuera de rango: <b>{duracion}</b>\n"
-        f"   🕐 Último dato: {hora_corta}  {fecha}"
+        f"📍 <b>{html.escape(name.strip())}</b>\n"
+        f"   🌡 Temp: <b>{html.escape(temp)}°C</b>   Rango: {html.escape(min_t)}°C → {html.escape(max_t)}°C\n"
+        f"   ⏱ Fuera de rango: <b>{html.escape(duracion)}</b>\n"
+        f"   🕐 Último dato: {html.escape(hora_corta)}  {html.escape(fecha)}"
     )
 
 
@@ -121,22 +123,54 @@ async def read_state() -> dict:
             return state
 
 
-async def write_state(state: dict):
-    """Guarda el estado actualizado en el repositorio GitHub."""
+async def write_state(state: dict) -> bool:
+    """Guarda el estado en GitHub. Reintenta con SHA fresco si hay conflicto.
+
+    Retorna True si se guardó, False si todos los intentos fallaron.
+    """
     if not GITHUB_TOKEN:
-        return
+        return True
+
     sha = state.pop("_sha", None)
-    content = base64.b64encode(json.dumps(state, indent=2, ensure_ascii=False).encode()).decode()
-    payload = {"message": "chore: update sensor state [skip ci]", "content": content}
-    if sha:
-        payload["sha"] = sha
-    async with aiohttp.ClientSession() as session:
-        async with session.put(GH_API, headers=GH_HEADERS, json=payload) as resp:
-            if resp.status not in (200, 201):
-                body = await resp.text()
-                print(f"  Error guardando estado: {resp.status} {body[:200]}")
-            else:
-                print("  Estado guardado en GitHub.")
+    to_persist = {"alerted": state.get("alerted", {})}
+
+    for attempt in range(1, 4):
+        content = base64.b64encode(
+            json.dumps(to_persist, indent=2, ensure_ascii=False).encode()
+        ).decode()
+        payload = {"message": "chore: update sensor state [skip ci]", "content": content}
+        if sha:
+            payload["sha"] = sha
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.put(
+                    GH_API, headers=GH_HEADERS, json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status in (200, 201):
+                        print(f"  Estado guardado en GitHub.")
+                        return True
+                    body = await resp.text()
+                    print(f"  Error guardando estado (intento {attempt}/3): {resp.status} {body[:200]}")
+
+                    if resp.status == 409:
+                        try:
+                            fresh = await read_state()
+                            sha = fresh.get("_sha")
+                            print("  SHA refrescado tras conflicto, reintentando...")
+                        except Exception as e:
+                            print(f"  No se pudo refrescar SHA: {e}")
+                            return False
+                    elif 400 <= resp.status < 500:
+                        return False
+                    else:
+                        await asyncio.sleep(3)
+        except Exception as e:
+            print(f"  Excepción guardando estado (intento {attempt}/3): {e}")
+            await asyncio.sleep(3)
+
+    return False
 
 
 async def ping_healthcheck(suffix: str = ""):
@@ -152,16 +186,34 @@ async def ping_healthcheck(suffix: str = ""):
         print(f"  Healthcheck ping falló: {e}")
 
 
-async def send_telegram(text: str):
+async def send_telegram(text: str) -> bool:
+    """Envía un mensaje a Telegram. Retorna True si el mensaje se entregó.
+
+    Reintenta hasta 3 veces si hay un error transitorio (timeout, 5xx).
+    """
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                print(f"Error Telegram {resp.status}: {body}")
-            else:
-                print("  Alerta enviada por Telegram.")
+
+    for attempt in range(1, 4):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url, json=payload,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status == 200:
+                        print("  Alerta enviada por Telegram.")
+                        return True
+                    body = await resp.text()
+                    print(f"  Error Telegram (intento {attempt}/3): {resp.status} {body[:300]}")
+                    if 400 <= resp.status < 500:
+                        return False  # error permanente (chat id malo, HTML inválido, etc.)
+                    await asyncio.sleep(3)
+        except Exception as e:
+            print(f"  Excepción Telegram (intento {attempt}/3): {e}")
+            await asyncio.sleep(3)
+
+    return False
 
 
 async def get_red_sensors_computed(page) -> list:
@@ -384,11 +436,14 @@ async def _run_attempt(attempt: int) -> None:
                 if len(new_red) > 20:
                     msg += f"\n\n… y {len(new_red) - 20} más."
                 print(f"  ALERTA: {n} sensores nuevos en rojo.")
-                await send_telegram(msg)
+                sent = await send_telegram(msg)
 
-                alert_time = now_chile.isoformat()
-                for name in new_red:
-                    alerted[name] = alert_time
+                if sent:
+                    alert_time = now_chile.isoformat()
+                    for name in new_red:
+                        alerted[name] = alert_time
+                else:
+                    print(f"  ⚠️ Telegram falló — {n} sensor(es) NO marcados, se reintentará en próximo run.")
             else:
                 if current_red:
                     print(f"  {len(current_red)} sensor(es) en rojo ya notificado(s) — sin nueva alerta.")
@@ -396,7 +451,9 @@ async def _run_attempt(attempt: int) -> None:
                     print("  Todo normal — sin alertas.")
 
             state["alerted"] = alerted
-            await write_state(state)
+            saved = await write_state(state)
+            if not saved:
+                print("  ⚠️ Estado NO guardado — próximo run podría re-alertar los mismos sensores.")
             await ping_healthcheck()
 
         except Exception:
@@ -411,7 +468,6 @@ async def _run_attempt(attempt: int) -> None:
 
 
 async def monitor():
-    import traceback
     last_error: Exception | None = None
 
     for attempt in range(1, MAX_RETRIES + 1):
