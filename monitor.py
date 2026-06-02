@@ -108,6 +108,19 @@ def _clean_stale_alerts(alerted: dict) -> dict:
     return clean
 
 
+def _outage_transition(prev_down: bool, run_ok: bool) -> tuple[bool, bool, bool]:
+    """Decide qué alertas de error mandar según el estado previo y el resultado del run.
+
+    Retorna (enviar_error, enviar_recuperacion, nuevo_flag_caido):
+      - enviar_error: True SOLO en la primera falla de una racha (evita spam).
+      - enviar_recuperacion: True cuando el sitio vuelve tras una caída ya notificada.
+      - nuevo_flag_caido: estado de caída a persistir en state.json.
+    """
+    if run_ok:
+        return (False, prev_down, False)
+    return (not prev_down, False, True)
+
+
 async def read_state() -> dict:
     """Lee el estado de sensores alertados desde el repositorio GitHub."""
     if not GITHUB_TOKEN:
@@ -132,7 +145,10 @@ async def write_state(state: dict) -> bool:
         return True
 
     sha = state.pop("_sha", None)
-    to_persist = {"alerted": state.get("alerted", {})}
+    to_persist = {
+        "alerted": state.get("alerted", {}),
+        "site_down": state.get("site_down", False),
+    }
 
     for attempt in range(1, 4):
         content = base64.b64encode(
@@ -450,6 +466,18 @@ async def _run_attempt(attempt: int) -> None:
                 else:
                     print("  Todo normal — sin alertas.")
 
+            # El run fue exitoso: detectar recuperación del sitio tras una caída.
+            prev_down = state.get("site_down", False)
+            _, send_recovery, new_down = _outage_transition(prev_down, run_ok=True)
+            if send_recovery:
+                now_str = now_chile.strftime("%H:%M  %d/%m/%Y")
+                print("  ✅ Sitio recuperado — notificando.")
+                await send_telegram(
+                    f"✅ <b>Monitor T-Sensor recuperado</b> — {now_str}\n"
+                    f"El sitio volvió a responder y el chequeo corrió normal."
+                )
+            state["site_down"] = new_down
+
             state["alerted"] = alerted
             saved = await write_state(state)
             if not saved:
@@ -483,16 +511,35 @@ async def monitor():
 
     # Los 3 intentos fallaron — notificar y abortar
     await ping_healthcheck("/fail")
+
+    # De-dup: alertar SOLO en la primera falla de una racha (caídas pasajeras del
+    # sitio no dependen de nosotros y se recuperan solas en el siguiente run).
     try:
-        now_str = datetime.now(CHILE_TZ).strftime("%H:%M  %d/%m/%Y")
-        await send_telegram(
-            f"⚠️ <b>ERROR en monitor T-Sensor</b> — {now_str}\n"
-            f"El sistema falló tras {MAX_RETRIES} intentos:\n"
-            f"<code>{str(last_error)[:3500]}</code>\n\n"
-            f"Revisa GitHub Actions para más detalles."
-        )
-    except Exception:
-        pass
+        state = await read_state()
+    except Exception as e:
+        print(f"  No se pudo leer estado para de-dup de error: {e}")
+        state = {"alerted": {}}
+    prev_down = state.get("site_down", False)
+    send_error, _, new_down = _outage_transition(prev_down, run_ok=False)
+
+    if send_error:
+        sent = False
+        try:
+            now_str = datetime.now(CHILE_TZ).strftime("%H:%M  %d/%m/%Y")
+            sent = await send_telegram(
+                f"⚠️ <b>ERROR en monitor T-Sensor</b> — {now_str}\n"
+                f"El sistema falló tras {MAX_RETRIES} intentos:\n"
+                f"<code>{str(last_error)[:3500]}</code>\n\n"
+                f"Revisa GitHub Actions para más detalles."
+            )
+        except Exception:
+            pass
+        if sent:
+            state["site_down"] = new_down
+            await write_state(state)
+    else:
+        print("  Sitio sigue caído — ERROR ya notificado, sin re-aviso.")
+
     raise last_error
 
 
