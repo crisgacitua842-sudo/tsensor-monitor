@@ -4,7 +4,28 @@
 Ejecutar:  python3 test_monitor.py
 """
 
-from monitor import _outage_transition
+import asyncio
+
+from monitor import _outage_transition, _goto_resilient, NAV_ATTEMPTS
+
+
+class _FakePage:
+    """Página falsa: las primeras `fail_gotos` navegaciones lanzan timeout."""
+
+    def __init__(self, fail_gotos: int):
+        self.fail_gotos = fail_gotos
+        self.goto_calls = 0
+
+    async def goto(self, url, wait_until=None, timeout=None):
+        self.goto_calls += 1
+        if self.goto_calls <= self.fail_gotos:
+            raise Exception("Page.goto: Timeout 20000ms exceeded.")
+
+    async def wait_for_selector(self, selector, timeout=None):
+        return True
+
+    async def wait_for_timeout(self, ms):
+        return None  # no dormimos de verdad en los tests
 
 
 def test_primera_falla_alerta():
@@ -37,6 +58,25 @@ def test_normal_sin_alertas():
     assert send_error is False
     assert send_recovery is False
     assert new_down is False
+
+
+def test_nav_reintenta_y_logra_entrar():
+    # Las 2 primeras navegaciones fallan, la 3ra entra → no debe lanzar.
+    page = _FakePage(fail_gotos=NAV_ATTEMPTS - 1)
+    asyncio.run(_goto_resilient(page, "http://x"))
+    assert page.goto_calls == NAV_ATTEMPTS
+
+
+def test_nav_se_rinde_si_todas_fallan():
+    # Si todas las navegaciones fallan, propaga el error tras agotar intentos.
+    page = _FakePage(fail_gotos=NAV_ATTEMPTS + 5)
+    try:
+        asyncio.run(_goto_resilient(page, "http://x"))
+        raised = False
+    except Exception:
+        raised = True
+    assert raised is True
+    assert page.goto_calls == NAV_ATTEMPTS
 
 
 if __name__ == "__main__":

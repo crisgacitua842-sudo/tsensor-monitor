@@ -273,10 +273,37 @@ async def get_red_sensors_computed(page) -> list:
     }""")
 
 
+NAV_ATTEMPTS = 3
+NAV_TIMEOUT_MS = 20_000
+
+
+async def _goto_resilient(page, url: str) -> None:
+    """Navega reintentando con conexiones frescas.
+
+    El servidor de T-Sensor a veces acepta la conexión pero no responde (se
+    queda sin workers). En lugar de quemar 60s en una conexión muerta, probamos
+    varias veces con timeout corto: una conexión nueva suele caer en un worker
+    sano. Esperamos el campo de contraseña para confirmar que el login cargó de
+    verdad, no solo que llegó una respuesta vacía.
+    """
+    last_err = None
+    for i in range(1, NAV_ATTEMPTS + 1):
+        try:
+            await page.goto(url, wait_until="commit", timeout=NAV_TIMEOUT_MS)
+            await page.wait_for_selector('input[type="password"]', timeout=15_000)
+            return
+        except Exception as e:
+            last_err = e
+            print(f"  Navegación intento {i}/{NAV_ATTEMPTS} falló: {str(e).splitlines()[0][:90]}")
+            if i < NAV_ATTEMPTS:
+                await page.wait_for_timeout(3000)
+    raise last_err
+
+
 async def navigate_to_scorecard(page):
     """Login y navega hasta cargar el Score Card."""
     print("  Cargando página de login...")
-    await page.goto(TSENSOR_URL, wait_until="domcontentloaded", timeout=60_000)
+    await _goto_resilient(page, TSENSOR_URL)
     await page.wait_for_timeout(2000)
 
     for sel in ['input[type="text"]', 'input[name*="user" i]',
