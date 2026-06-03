@@ -1,4 +1,6 @@
 {
-  "alerted": {},
-  "site_down": true
+  "alerted": {
+    "San Felipe Bodega - Congelado 1": "2026-06-03T03:10:46.747974-04:00"
+  },
+  "site_down": false
 }
