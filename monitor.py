@@ -149,6 +149,9 @@ async def write_state(state: dict) -> bool:
         "alerted": state.get("alerted", {}),
         "site_down": state.get("site_down", False),
     }
+    if state.get("outage"):
+        # Registro interno del último error del servidor (no se avisa al grupo).
+        to_persist["outage"] = state["outage"]
 
     for attempt in range(1, 4):
         content = base64.b64encode(
@@ -493,17 +496,15 @@ async def _run_attempt(attempt: int) -> None:
                 else:
                     print("  Todo normal — sin alertas.")
 
-            # El run fue exitoso: detectar recuperación del sitio tras una caída.
+            # El run fue exitoso: si el servidor venía caído, limpiar el registro.
+            # NO se avisa al grupo (de la caída/recuperación se encarga el bot de health).
             prev_down = state.get("site_down", False)
-            _, send_recovery, new_down = _outage_transition(prev_down, run_ok=True)
-            if send_recovery:
-                now_str = now_chile.strftime("%H:%M  %d/%m/%Y")
-                print("  ✅ Sitio recuperado — notificando.")
-                await send_telegram(
-                    f"✅ <b>Monitor T-Sensor recuperado</b> — {now_str}\n"
-                    f"El sitio volvió a responder y el chequeo corrió normal."
-                )
+            _, recovered, new_down = _outage_transition(prev_down, run_ok=True)
+            if recovered:
+                print("  ✅ Servidor recuperado — limpiando registro interno (sin avisar al grupo).")
             state["site_down"] = new_down
+            if not new_down:
+                state.pop("outage", None)
 
             state["alerted"] = alerted
             saved = await write_state(state)
@@ -536,36 +537,34 @@ async def monitor():
                 print(f"  Intento {attempt} falló. Reintentando en {RETRY_DELAY_SECS}s...")
                 await asyncio.sleep(RETRY_DELAY_SECS)
 
-    # Los 3 intentos fallaron — notificar y abortar
+    # Los 3 intentos fallaron — abortar.
+    # NO se avisa al grupo de Telegram: de las caídas/recuperaciones del servidor
+    # se encarga el bot de healthchecks.io. El /fail es justo lo que ese bot lee.
     await ping_healthcheck("/fail")
 
-    # De-dup: alertar SOLO en la primera falla de una racha (caídas pasajeras del
-    # sitio no dependen de nosotros y se recuperan solas en el siguiente run).
+    # Guardamos el error INTERNAMENTE en state.json solo en la primera falla de la
+    # racha (preserva el error original y desde cuándo), por si el servidor no vuelve.
     try:
         state = await read_state()
     except Exception as e:
-        print(f"  No se pudo leer estado para de-dup de error: {e}")
+        print(f"  No se pudo leer estado para registrar el error: {e}")
         state = {"alerted": {}}
     prev_down = state.get("site_down", False)
-    send_error, _, new_down = _outage_transition(prev_down, run_ok=False)
+    record_error, _, _ = _outage_transition(prev_down, run_ok=False)
 
-    if send_error:
-        sent = False
-        try:
-            now_str = datetime.now(CHILE_TZ).strftime("%H:%M  %d/%m/%Y")
-            sent = await send_telegram(
-                f"⚠️ <b>ERROR en monitor T-Sensor</b> — {now_str}\n"
-                f"El sistema falló tras {MAX_RETRIES} intentos:\n"
-                f"<code>{str(last_error)[:3500]}</code>\n\n"
-                f"Revisa GitHub Actions para más detalles."
-            )
-        except Exception:
-            pass
-        if sent:
-            state["site_down"] = new_down
-            await write_state(state)
+    if record_error:
+        state["site_down"] = True
+        state["outage"] = {
+            "since": datetime.now(CHILE_TZ).isoformat(),
+            "error": str(last_error)[:1500],
+        }
+        saved = await write_state(state)
+        if saved:
+            print("  Servidor no responde — error guardado internamente en state.json (sin avisar al grupo).")
+        else:
+            print("  ⚠️ Servidor no responde y NO se pudo guardar el registro del error.")
     else:
-        print("  Sitio sigue caído — ERROR ya notificado, sin re-aviso.")
+        print("  Servidor sigue sin responder — ya registrado, sin cambios.")
 
     raise last_error
 
