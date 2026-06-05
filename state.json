@@ -1,4 +1,7 @@
 {
-  "alerted": {},
+  "alerted": {
+    "San Antonio Bodega - Congelados": "2026-06-05T08:00:50.747507-04:00",
+    "Osorno Bodega - Congelados 3": "2026-06-05T08:00:50.747507-04:00"
+  },
   "site_down": false
 }
