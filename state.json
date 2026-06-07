@@ -3,9 +3,5 @@
     "Talca - Anden Lateral": "2026-06-07T08:50:34.146120-04:00",
     "Talca - Anden Central": "2026-06-07T11:50:53.054028-04:00"
   },
-  "site_down": true,
-  "outage": {
-    "since": "2026-06-07T12:44:31.027023-04:00",
-    "error": "Page.goto: Timeout 20000ms exceeded.\nCall log:\nnavigating to \"https://app.tsensor.online/informes/menu/98\", waiting until \"commit\"\n"
-  }
+  "site_down": false
 }
