@@ -1,7 +1,4 @@
 {
-  "alerted": {
-    "San Felipe Bodega - Congelado 1": "2026-06-11T14:31:01.040152-04:00",
-    "Bodegas Copiapo - Anden": "2026-06-11T17:00:53.731526-04:00"
-  },
+  "alerted": {},
   "site_down": false
 }
