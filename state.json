@@ -1,4 +1,9 @@
 {
-  "alerted": {},
+  "alerted": {
+    "Calama Bodega - .Fresco 4": "2026-06-24T18:40:50.192176-04:00",
+    "Calama Bodega - .Fresco 3": "2026-06-24T18:40:50.192176-04:00",
+    "Calama Bodega - .Fresco 2": "2026-06-24T18:40:50.192176-04:00",
+    "Calama Bodega - .Anden": "2026-06-24T18:40:50.192176-04:00"
+  },
   "site_down": false
 }
