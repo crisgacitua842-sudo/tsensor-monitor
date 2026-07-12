@@ -1,8 +1,7 @@
 {
-  "alerted": {},
-  "site_down": true,
-  "outage": {
-    "since": "2026-07-11T23:34:03.018921-04:00",
-    "error": "Page.wait_for_selector: Timeout 15000ms exceeded.\nCall log:\nwaiting for locator(\"input[type=\\\"password\\\"]\") to be visible\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/"
-  }
+  "alerted": {
+    "La Negra Bodega - Congelados Producto": "2026-07-11T23:41:12.077768-04:00",
+    "La Negra Bodega - Congelado Retorno": "2026-07-11T23:41:12.077768-04:00"
+  },
+  "site_down": false
 }
