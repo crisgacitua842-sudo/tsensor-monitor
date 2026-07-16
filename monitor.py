@@ -288,12 +288,19 @@ async def _goto_resilient(page, url: str) -> None:
     varias veces con timeout corto: una conexión nueva suele caer en un worker
     sano. Esperamos el campo de contraseña para confirmar que el login cargó de
     verdad, no solo que llegó una respuesta vacía.
+
+    OJO: esperamos que el campo exista en el HTML (attached), no que se vea.
+    El formulario viene con display:none y solo se muestra cuando el reCAPTCHA
+    de Google responde; desde los runners de GitHub (IPs de datacenter) Google
+    no responde nunca, así que esperar visibilidad deja al bot caído aunque el
+    sitio esté sano (caída del 14-jul-2026).
     """
     last_err = None
     for i in range(1, NAV_ATTEMPTS + 1):
         try:
             await page.goto(url, wait_until="commit", timeout=NAV_TIMEOUT_MS)
-            await page.wait_for_selector('input[type="password"]', timeout=15_000)
+            await page.wait_for_selector('input[type="password"]',
+                                         state="attached", timeout=15_000)
             return
         except Exception as e:
             last_err = e
@@ -309,20 +316,22 @@ async def navigate_to_scorecard(page):
     await _goto_resilient(page, TSENSOR_URL)
     await page.wait_for_timeout(2000)
 
-    for sel in ['input[type="text"]', 'input[name*="user" i]',
-                'input[placeholder*="usuario" i]', 'input[id*="user" i]']:
-        el = await page.query_selector(sel)
-        if el:
-            await el.fill(TSENSOR_USER)
-            break
-
-    await page.fill('input[type="password"]', TSENSOR_PASS)
-    for sel in ['button:has-text("ENTRAR")', 'button:has-text("Entrar")',
-                'button[type="submit"]', 'input[type="submit"]']:
-        btn = await page.query_selector(sel)
-        if btn:
-            await btn.click()
-            break
+    # Llenamos y enviamos el formulario por JavaScript, sin click en ENTRAR:
+    # los campos pueden estar ocultos esperando al reCAPTCHA (que en GitHub
+    # nunca llega) y el botón solo hace submit del formulario; el servidor no
+    # exige el token del captcha para el login.
+    await page.evaluate(
+        """([usuario, clave]) => {
+            const user = document.querySelector('#UsuarioLogin')
+                || document.querySelector('form input[type="text"]');
+            const pass = document.querySelector('#UsuarioPsword')
+                || document.querySelector('input[type="password"]');
+            user.value = usuario;
+            pass.value = clave;
+            (document.querySelector('#signin-form_id') || pass.form).submit();
+        }""",
+        [TSENSOR_USER, TSENSOR_PASS],
+    )
 
     await page.wait_for_load_state("networkidle", timeout=20_000)
     await page.wait_for_timeout(2000)

@@ -21,7 +21,7 @@ class _FakePage:
         if self.goto_calls <= self.fail_gotos:
             raise Exception("Page.goto: Timeout 20000ms exceeded.")
 
-    async def wait_for_selector(self, selector, timeout=None):
+    async def wait_for_selector(self, selector, state=None, timeout=None):
         return True
 
     async def wait_for_timeout(self, ms):
