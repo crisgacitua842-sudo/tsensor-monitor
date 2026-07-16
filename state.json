@@ -1,8 +1,4 @@
 {
   "alerted": {},
-  "site_down": true,
-  "outage": {
-    "since": "2026-07-14T19:23:59.804475-04:00",
-    "error": "Page.wait_for_selector: Timeout 15000ms exceeded.\nCall log:\nwaiting for locator(\"input[type=\\\"password\\\"]\") to be visible\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/>\n  -   locator resolved to hidden <input type=\"password\" id=\"UsuarioPsword\" placeholder=\"…/"
-  }
+  "site_down": false
 }
