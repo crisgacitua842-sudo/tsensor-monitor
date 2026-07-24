@@ -1,8 +1,6 @@
 {
-  "alerted": {},
-  "site_down": true,
-  "outage": {
-    "since": "2026-07-24T04:24:27.076597-04:00",
-    "error": "Page.goto: Timeout 20000ms exceeded.\nCall log:\nnavigating to \"https://app.tsensor.online/informes/menu/98\", waiting until \"commit\"\n"
-  }
+  "alerted": {
+    "La Negra Bodega - Congelados Producto": "2026-07-24T04:30:46.028818-04:00"
+  },
+  "site_down": false
 }
