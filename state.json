@@ -2,5 +2,9 @@
   "alerted": {
     "Punta Arenas Exterior - Congelados": "2026-07-24T10:10:55.293359-04:00"
   },
-  "site_down": false
+  "site_down": true,
+  "outage": {
+    "since": "2026-07-25T04:04:27.061931-04:00",
+    "error": "Page.goto: Timeout 20000ms exceeded.\nCall log:\nnavigating to \"https://app.tsensor.online/informes/menu/98\", waiting until \"commit\"\n"
+  }
 }
