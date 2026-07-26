@@ -2,9 +2,5 @@
   "alerted": {
     "Talca - Anden Central": "2026-07-25T21:20:39.433197-04:00"
   },
-  "site_down": true,
-  "outage": {
-    "since": "2026-07-26T04:34:44.791918-04:00",
-    "error": "Page.goto: Timeout 20000ms exceeded.\nCall log:\nnavigating to \"https://app.tsensor.online/informes/menu/98\", waiting until \"commit\"\n"
-  }
+  "site_down": false
 }
