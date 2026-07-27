@@ -1,8 +1,4 @@
 {
   "alerted": {},
-  "site_down": true,
-  "outage": {
-    "since": "2026-07-27T09:04:51.003740-04:00",
-    "error": "Page.goto: Timeout 20000ms exceeded.\nCall log:\nnavigating to \"https://app.tsensor.online/informes/menu/98\", waiting until \"commit\"\n"
-  }
+  "site_down": false
 }
