@@ -1,4 +1,7 @@
 {
-  "alerted": {},
+  "alerted": {
+    "Miraflores Bodega - Congelado S3": "2026-07-29T20:10:51.677024-04:00",
+    "Miraflores Bodega - Anden S3": "2026-07-29T20:10:51.677024-04:00"
+  },
   "site_down": false
 }
