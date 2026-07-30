@@ -1,8 +1,4 @@
 {
-  "alerted": {
-    "Miraflores Bodega - Anden S4": "2026-07-30T16:40:51.343429-04:00",
-    "Miraflores Bodega - Anden S3": "2026-07-30T16:40:51.343429-04:00",
-    "Miraflores Bodega - Anden S2": "2026-07-30T16:40:51.343429-04:00"
-  },
+  "alerted": {},
   "site_down": false
 }
