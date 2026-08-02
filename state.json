@@ -4,9 +4,5 @@
     "Talca - Congelado 1": "2026-08-01T22:50:58.133304-04:00",
     "Talca - Congelado 2": "2026-08-01T23:30:40.085924-04:00"
   },
-  "site_down": true,
-  "outage": {
-    "since": "2026-08-02T01:04:42.470204-04:00",
-    "error": "Page.goto: Timeout 20000ms exceeded.\nCall log:\nnavigating to \"https://app.tsensor.online/informes/menu/98\", waiting until \"commit\"\n"
-  }
+  "site_down": false
 }
