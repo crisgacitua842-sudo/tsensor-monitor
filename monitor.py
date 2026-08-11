@@ -74,6 +74,36 @@ def _format_sensor(raw: str) -> str:
     )
 
 
+ALERT_BATCH_SIZE = 8
+
+
+def _build_alert_messages(new_red: dict, now_str: str) -> list:
+    """Arma los mensajes de alerta en tandas de ALERT_BATCH_SIZE sensores.
+
+    Telegram rechaza mensajes de más de 4096 caracteres como error permanente,
+    así que un incidente grande (equipo completo en rojo) se quedaba sin avisar
+    justo cuando más importa. Cada tanda va en su propio mensaje.
+
+    Retorna [(nombres_de_la_tanda, texto_del_mensaje), ...].
+    """
+    nombres = list(new_red)
+    total = len(nombres)
+    label = "sensor fuera de rango" if total == 1 else "sensores fuera de rango"
+    sep = "─" * 22
+    tandas = [nombres[i:i + ALERT_BATCH_SIZE] for i in range(0, total, ALERT_BATCH_SIZE)]
+
+    mensajes = []
+    for idx, tanda in enumerate(tandas, start=1):
+        parte = f"  (parte {idx}/{len(tandas)})" if len(tandas) > 1 else ""
+        msg = f"🚨 <b>ALERTA T-SENSOR</b> — {now_str}{parte}\n"
+        msg += f"<b>{total} {label}</b>\n\n"
+        for name in tanda:
+            msg += f"{sep}\n{_format_sensor(new_red[name]['text'])}\n"
+        msg += sep
+        mensajes.append((tanda, msg))
+    return mensajes
+
+
 TSENSOR_URL      = os.environ.get("TSENSOR_URL", "https://app.tsensor.online/informes/menu/98")
 TSENSOR_USER     = os.environ.get("TSENSOR_USER")
 TSENSOR_PASS     = os.environ.get("TSENSOR_PASS")
@@ -122,18 +152,40 @@ def _outage_transition(prev_down: bool, run_ok: bool) -> tuple[bool, bool, bool]
 
 
 async def read_state() -> dict:
-    """Lee el estado de sensores alertados desde el repositorio GitHub."""
+    """Lee el estado de sensores alertados desde el repositorio GitHub.
+
+    Reintenta ante fallas transitorias de la API de GitHub. Sin esto, un
+    hipo de GitHub (no de T-Sensor) tumbaba el run entero y quedaba
+    registrado como "servidor T-Sensor caído", que es un diagnóstico falso.
+    """
     if not GITHUB_TOKEN:
         return {"alerted": {}}
-    async with aiohttp.ClientSession() as session:
-        async with session.get(GH_API, headers=GH_HEADERS) as resp:
-            if resp.status == 404:
-                return {"alerted": {}}
-            data = await resp.json()
+
+    last_err = None
+    for attempt in range(1, 4):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    GH_API, headers=GH_HEADERS,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status == 404:
+                        return {"alerted": {}}
+                    if resp.status != 200:
+                        body = await resp.text()
+                        raise RuntimeError(f"GitHub respondió {resp.status}: {body[:200]}")
+                    data = await resp.json()
             content = base64.b64decode(data["content"]).decode("utf-8")
             state = json.loads(content)
             state["_sha"] = data["sha"]
             return state
+        except Exception as e:
+            last_err = e
+            print(f"  Error leyendo estado (intento {attempt}/3): {str(e)[:200]}")
+            if attempt < 3:
+                await asyncio.sleep(3)
+
+    raise last_err
 
 
 async def write_state(state: dict) -> bool:
@@ -478,27 +530,25 @@ async def _run_attempt(attempt: int) -> None:
 
             new_red = {name: item for name, item in current_red.items() if name not in alerted}
 
+            alertas_sin_enviar = 0
+
             if new_red:
                 now_str = now_chile.strftime("%H:%M  %d/%m/%Y")
                 n = len(new_red)
-                label = "sensor fuera de rango" if n == 1 else "sensores fuera de rango"
-                sep = "─" * 22
-                msg = f"🚨 <b>ALERTA T-SENSOR</b> — {now_str}\n"
-                msg += f"<b>{n} {label}</b>\n\n"
-                for name, item in list(new_red.items())[:20]:
-                    msg += f"{sep}\n{_format_sensor(item['text'])}\n"
-                msg += sep
-                if len(new_red) > 20:
-                    msg += f"\n\n… y {len(new_red) - 20} más."
-                print(f"  ALERTA: {n} sensores nuevos en rojo.")
-                sent = await send_telegram(msg)
+                mensajes = _build_alert_messages(new_red, now_str)
+                print(f"  ALERTA: {n} sensores nuevos en rojo ({len(mensajes)} mensaje(s)).")
+                alert_time = now_chile.isoformat()
 
-                if sent:
-                    alert_time = now_chile.isoformat()
-                    for name in new_red:
-                        alerted[name] = alert_time
-                else:
-                    print(f"  ⚠️ Telegram falló — {n} sensor(es) NO marcados, se reintentará en próximo run.")
+                for tanda, msg in mensajes:
+                    if await send_telegram(msg):
+                        for name in tanda:
+                            alerted[name] = alert_time
+                    else:
+                        alertas_sin_enviar += len(tanda)
+
+                if alertas_sin_enviar:
+                    print(f"  ⚠️ Telegram falló — {alertas_sin_enviar} sensor(es) NO marcados, "
+                          f"se reintentará en próximo run.")
             else:
                 if current_red:
                     print(f"  {len(current_red)} sensor(es) en rojo ya notificado(s) — sin nueva alerta.")
@@ -519,7 +569,17 @@ async def _run_attempt(attempt: int) -> None:
             saved = await write_state(state)
             if not saved:
                 print("  ⚠️ Estado NO guardado — próximo run podría re-alertar los mismos sensores.")
-            await ping_healthcheck()
+
+            # Si hay sensores en rojo que no se pudieron avisar, el run NO sirvió
+            # de nada para el usuario: mandamos /fail para que el bot de
+            # healthchecks.io avise que las alertas no están llegando. Sin esto,
+            # Telegram puede estar roto durante días con el monitor "en verde"
+            # (pasó el 11-ago-2026 con la migración del grupo a supergrupo).
+            if alertas_sin_enviar:
+                print(f"  ⚠️ {alertas_sin_enviar} alerta(s) sin entregar — avisando /fail a healthchecks.")
+                await ping_healthcheck("/fail")
+            else:
+                await ping_healthcheck()
 
         except Exception:
             if DEBUG:
