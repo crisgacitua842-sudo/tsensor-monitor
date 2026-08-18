@@ -1,0 +1,11 @@
+.git
+.github
+.agents
+*.png
+debug_*
+state.json
+test_monitor.py
+skills-lock.json
+__pycache__
+*.pyc
+.env

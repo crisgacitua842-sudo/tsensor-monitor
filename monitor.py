@@ -337,6 +337,13 @@ async def get_red_sensors_computed(page) -> list:
 NAV_ATTEMPTS = 3
 NAV_TIMEOUT_MS = 20_000
 
+# Argumentos de Chromium. Necesarios dentro de un contenedor (Railway):
+# /dev/shm son 64 MB por defecto y el Score Card es una página pesada (~1 MB de
+# HTML con tablas), así que sin --disable-dev-shm-usage Chromium se cae. En los
+# runners de GitHub (VM, /dev/shm grande) son inofensivos, por eso van siempre y
+# no hay dos caminos distintos que mantener.
+CHROMIUM_ARGS = ["--disable-dev-shm-usage", "--no-sandbox"]
+
 
 async def _goto_resilient(page, url: str) -> None:
     """Navega reintentando con conexiones frescas.
@@ -505,7 +512,7 @@ RETRY_DELAY_SECS = 15
 async def _run_attempt(attempt: int) -> None:
     """Ejecuta un intento completo de chequeo usando su propio browser."""
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=True, args=CHROMIUM_ARGS)
         page = await browser.new_page(viewport={"width": 1440, "height": 900})
         try:
             now_chile = datetime.now(CHILE_TZ)
