@@ -28,7 +28,9 @@ _SENSOR_RE = re.compile(
     r'(\d{1,2}\s+\w+\s+\d{4})\s+'
     r'(\d{2}:\d{2}:\d{2})\s+'
     r'T\.\s*Fuera(?:\s+Rango)?:\s+'
-    r'(\d{2}:\d{2}:\d{2}|\d+\s+D[íiï][^\s]*\s+\d+\s+Min(?:uto[s]?)?)',
+    # Duración: "HH:MM:SS" o "2 Días 17 Hrs 33 Min" (las horas son opcionales;
+    # "Días" suele venir con encoding roto tipo "Dï¿½as", por eso el [^\s]*).
+    r'(\d{2}:\d{2}:\d{2}|\d+\s+D[íiï][^\s]*(?:\s+\d+\s+H[^\s]*)?\s+\d+\s+Min(?:uto[s]?)?)',
     re.UNICODE | re.IGNORECASE,
 )
 
@@ -36,9 +38,13 @@ _SENSOR_RE = re.compile(
 def _fmt_duration(raw: str) -> str:
     day_m = re.match(r'(\d+)\s+D', raw, re.IGNORECASE)
     if day_m:
+        hrs_m = re.search(r'(\d+)\s+H', raw, re.IGNORECASE)
         mins_m = re.search(r'(\d+)\s+Min', raw, re.IGNORECASE)
         d = int(day_m.group(1))
+        h = int(hrs_m.group(1)) if hrs_m else 0
         m = int(mins_m.group(1)) if mins_m else 0
+        if h:
+            return f"{d}d {h}h {m:02d}min"
         return f"{d}d {m:02d}min"
     parts = raw.split(':')
     h, m = int(parts[0]), int(parts[1])

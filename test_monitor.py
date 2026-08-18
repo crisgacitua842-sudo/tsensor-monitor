@@ -9,6 +9,7 @@ import asyncio
 from monitor import (
     _outage_transition, _goto_resilient, NAV_ATTEMPTS,
     _build_alert_messages, ALERT_BATCH_SIZE,
+    _fmt_duration, _format_sensor,
 )
 
 TELEGRAM_MAX_CHARS = 4096
@@ -130,6 +131,33 @@ def test_ningun_mensaje_excede_el_limite_de_telegram():
 
 def test_sin_sensores_no_genera_mensajes():
     assert _build_alert_messages({}, "14:32  11/08/2026") == []
+
+
+def test_duracion_con_dias_horas_y_minutos():
+    # Formatos reales del Score Card, incluido el encoding roto del sitio.
+    assert _fmt_duration("02:09:44") == "2h 09min"
+    assert _fmt_duration("00:45:12") == "45min"
+    assert _fmt_duration("2 Dï¿½as 17 Hrs 33 Min") == "2d 17h 33min"
+    assert _fmt_duration("1 Dï¿½a 16 Hrs 8 Min") == "1d 16h 08min"
+    assert _fmt_duration("3 Días 12 Min") == "3d 12min"
+
+
+def test_sensor_con_dias_y_horas_se_formatea_bonito():
+    # Caso real del 17-ago-2026 que llegaba como texto crudo (sin formato):
+    # la duración "N Días N Hrs N Min" no calzaba con el regex.
+    raw = ("San Antonio Bodega - Anden - Fresco 4.3 ºC Max: 2ºC Min: -6ºC "
+           "17 Agos 2026 09:20:37 T. Fuera: 2 Dï¿½as 17 Hrs 33 Min")
+    out = _format_sensor(raw)
+    assert not out.startswith("•"), f"cayó al formato crudo: {out[:80]}"
+    assert "<b>San Antonio Bodega - Anden - Fresco</b>" in out
+    assert "2d 17h 33min" in out
+    assert "4.3°C" in out
+    # Y el formato de siempre (HH:MM:SS) sigue funcionando igual.
+    raw2 = ("Coquimbo Bodega - Anden S1 2.4 ºC Max: 2ºC Min: -6ºC "
+            "17 Agos 2026 00:00:00 T. Fuera Rango: 02:09:44")
+    out2 = _format_sensor(raw2)
+    assert not out2.startswith("•")
+    assert "2h 09min" in out2
 
 
 if __name__ == "__main__":
