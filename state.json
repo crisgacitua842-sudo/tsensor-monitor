@@ -1,7 +1,4 @@
 {
-  "alerted": {
-    "Talca - Anden Central": "2026-08-30T12:40:51.871712-04:00",
-    "Talca - Anden Lateral": "2026-08-30T12:50:52.753032-04:00"
-  },
+  "alerted": {},
   "site_down": false
 }
