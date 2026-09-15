@@ -10,6 +10,7 @@ from monitor import (
     _outage_transition, _goto_resilient, NAV_ATTEMPTS,
     _build_alert_messages, ALERT_BATCH_SIZE,
     _fmt_duration, _format_sensor,
+    _evaluar_lecturas, MIN_LECTURAS_CONFIABLE,
 )
 
 TELEGRAM_MAX_CHARS = 4096
@@ -131,6 +132,37 @@ def test_ningun_mensaje_excede_el_limite_de_telegram():
 
 def test_sin_sensores_no_genera_mensajes():
     assert _build_alert_messages({}, "14:32  11/08/2026") == []
+
+
+def test_pagina_vacia_no_es_confiable():
+    # El caso del bug: la página no cargó. No se puede concluir NADA.
+    confiable, puede_limpiar = _evaluar_lecturas(0)
+    assert confiable is False
+    assert puede_limpiar is False
+
+
+def test_pagina_a_medias_alerta_pero_no_limpia():
+    # Asimetría deliberada: se avisa de lo que se vio (no perder una alerta
+    # real), pero no se marca nada como recuperado (no inventar recuperaciones
+    # que después disparan alertas repetidas).
+    confiable, puede_limpiar = _evaluar_lecturas(MIN_LECTURAS_CONFIABLE - 1)
+    assert confiable is True
+    assert puede_limpiar is False
+
+
+def test_pagina_completa_permite_todo():
+    # ~350 lecturas es lo normal en el Score Card sano.
+    for n in (MIN_LECTURAS_CONFIABLE, 342, 351, 1000):
+        confiable, puede_limpiar = _evaluar_lecturas(n)
+        assert confiable is True, n
+        assert puede_limpiar is True, n
+
+
+def test_lecturas_negativas_o_raras_no_rompen():
+    # Si contar falla, _contar_lecturas devuelve 0; un negativo no debería
+    # colarse, pero si llegara, debe tratarse como no confiable.
+    for n in (-1, -100):
+        assert _evaluar_lecturas(n) == (False, False), n
 
 
 def test_duracion_con_dias_horas_y_minutos():

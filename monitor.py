@@ -334,6 +334,49 @@ async def get_red_sensors_computed(page) -> list:
     }""")
 
 
+# El Score Card sano trae ~350 lecturas de temperatura (observado: 342-351 en
+# semanas de corridas). Muy por debajo de eso significa que la página no alcanzó
+# a renderizar, y entonces "no vi ningún sensor en rojo" NO significa "no hay
+# ninguno en rojo".
+MIN_LECTURAS_CONFIABLE = 50
+
+
+class ScorecardVacioError(RuntimeError):
+    """El Score Card no trajo ni una lectura: no se puede concluir nada."""
+
+
+def _evaluar_lecturas(n_lecturas: int) -> tuple[bool, bool]:
+    """Decide cuánto se le puede creer a un scrape, según cuántas lecturas trajo.
+
+    Retorna (confiable, puede_limpiar_recuperados).
+
+    El bug que esto evita: si la página no carga, la lista de sensores en rojo
+    sale vacía, el código concluye que TODOS se recuperaron, borra el registro
+    y en la vuelta siguiente los ve rojos otra vez y los re-alerta. Le pasó al
+    usuario 3 veces entre mayo y agosto de 2026.
+
+    La escala es deliberadamente asimétrica: ante la duda se alerta igual (no
+    perder un aviso real), pero NO se borra el registro (no inventar
+    recuperaciones que disparan alertas repetidas).
+    """
+    if n_lecturas <= 0:
+        return (False, False)
+    if n_lecturas < MIN_LECTURAS_CONFIABLE:
+        return (True, False)
+    return (True, True)
+
+
+async def _contar_lecturas(target) -> int:
+    """Cuántas lecturas de temperatura (°C) hay en la página o frame."""
+    try:
+        return await target.evaluate(
+            "() => (document.body.innerText.match(/[\\u00ba\\u00b0]C/g) || []).length"
+        )
+    except Exception as e:
+        print(f"  No se pudieron contar las lecturas: {e}")
+        return 0
+
+
 NAV_ATTEMPTS = 3
 NAV_TIMEOUT_MS = 20_000
 
@@ -534,12 +577,29 @@ async def _run_attempt(attempt: int) -> None:
                 red_items = await get_red_sensors_computed(target)
                 print(f"  Sensores rojos encontrados (2do scan): {len(red_items)}")
 
+            # Antes de creerle a este scrape, comprobar que la página realmente
+            # trajo datos. Sin esto, una página a medio cargar se interpreta como
+            # "todos los sensores se recuperaron" y provoca alertas repetidas.
+            lecturas = await _contar_lecturas(target)
+            confiable, puede_limpiar = _evaluar_lecturas(lecturas)
+            print(f"  Lecturas de temperatura en la página: {lecturas} "
+                  f"({'confiable' if puede_limpiar else 'NO confiable'})")
+            if not confiable:
+                raise ScorecardVacioError(
+                    f"El Score Card no trajo ninguna lectura de temperatura "
+                    f"(se esperaban ~{MIN_LECTURAS_CONFIABLE}+). La página no cargó bien."
+                )
+            if not puede_limpiar:
+                print(f"  ⚠️ Solo {lecturas} lecturas (lo normal son ~350): la página cargó a "
+                      "medias. Se avisa de lo que se vio, pero NO se marca nada como recuperado.")
+
             current_red = {_extract_name(item["text"]): item for item in red_items}
 
-            recovered = [name for name in alerted if name not in current_red]
-            for name in recovered:
-                print(f"  ✅ Recuperado: {name}")
-                del alerted[name]
+            if puede_limpiar:
+                recovered = [name for name in alerted if name not in current_red]
+                for name in recovered:
+                    print(f"  ✅ Recuperado: {name}")
+                    del alerted[name]
 
             new_red = {name: item for name, item in current_red.items() if name not in alerted}
 
@@ -583,13 +643,21 @@ async def _run_attempt(attempt: int) -> None:
             if not saved:
                 print("  ⚠️ Estado NO guardado — próximo run podría re-alertar los mismos sensores.")
 
-            # Si hay sensores en rojo que no se pudieron avisar, el run NO sirvió
-            # de nada para el usuario: mandamos /fail para que el bot de
-            # healthchecks.io avise que las alertas no están llegando. Sin esto,
-            # Telegram puede estar roto durante días con el monitor "en verde"
-            # (pasó el 11-ago-2026 con la migración del grupo a supergrupo).
-            if alertas_sin_enviar:
-                print(f"  ⚠️ {alertas_sin_enviar} alerta(s) sin entregar — avisando /fail a healthchecks.")
+            # El run solo cuenta como bueno si las alertas salieron Y el estado
+            # quedó guardado. Si falla cualquiera de las dos, /fail para que el
+            # bot de healthchecks.io avise:
+            #  - alertas sin entregar: Telegram puede estar roto durante días con
+            #    el monitor "en verde" (pasó el 11-ago-2026 con la migración del
+            #    grupo a supergrupo).
+            #  - estado sin guardar: el próximo run re-alerta lo mismo, y así cada
+            #    10 minutos, sin que ninguna alarma se entere.
+            if alertas_sin_enviar or not saved:
+                motivos = []
+                if alertas_sin_enviar:
+                    motivos.append(f"{alertas_sin_enviar} alerta(s) sin entregar")
+                if not saved:
+                    motivos.append("estado no guardado")
+                print(f"  ⚠️ {' y '.join(motivos)} — avisando /fail a healthchecks.")
                 await ping_healthcheck("/fail")
             else:
                 await ping_healthcheck()
