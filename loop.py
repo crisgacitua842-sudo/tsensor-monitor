@@ -61,18 +61,48 @@ def _tiene_credenciales() -> bool:
     return bool(monitor.TSENSOR_USER and monitor.TSENSOR_PASS)
 
 
-def _matar_chromium_huerfano() -> None:
-    """Mata Chromium que haya quedado vivo tras cortar un ciclo colgado.
+def _contar_procesos() -> str:
+    """Procesos vivos y cupo del contenedor, para vigilar la fuga.
 
-    Si cancelamos monitor() por timeout, Playwright puede dejar procesos vivos.
-    En un proceso que corre semanas eso se acumula y consume la RAM que Railway
-    factura, así que barremos después de cada corte.
+    Un proceso efímero (GitHub Actions) es inmune a las fugas: nace y muere en
+    cada revisión. Uno always-on no: el 15-sep-2026, tras 28 días seguidos
+    corriendo, Chromium ya no podía crear su proceso hijo ("Failed to launch
+    zygote process") con la memoria al 5% — o sea se acabaron los PIDs, no la
+    RAM. Por eso ahora se mide en cada ciclo y queda en el log.
+    """
+    try:
+        vivos = len([d for d in os.listdir("/proc") if d.isdigit()])
+    except Exception:
+        return "no medible"
+
+    detalle = f"{vivos} procesos"
+    for ruta in ("/sys/fs/cgroup/pids.current", "/sys/fs/cgroup/pids/pids.current"):
+        try:
+            with open(ruta) as f:
+                usados = f.read().strip()
+            tope_ruta = ruta.replace("current", "max")
+            with open(tope_ruta) as f:
+                tope = f.read().strip()
+            detalle += f", PIDs del contenedor {usados}/{tope}"
+            break
+        except Exception:
+            continue
+    return detalle
+
+
+def _matar_chromium_huerfano(motivo: str) -> None:
+    """Barre Chromium que haya quedado vivo, al final de CADA ciclo.
+
+    Antes solo se llamaba al cortar un ciclo colgado, y eso resultó insuficiente:
+    los restos de los ciclos que fallan (o que Playwright no alcanza a reapear)
+    se acumulan día tras día hasta agotar el cupo de procesos. Como se ejecuta
+    cuando el ciclo ya terminó, no hay ningún navegador legítimo que matar.
     """
     try:
         r = subprocess.run(["pkill", "-f", "chrome|chromium"],
                            capture_output=True, timeout=10)
         if r.returncode == 0:
-            log("  Se mataron procesos de Chromium huérfanos tras el corte.")
+            log(f"  Se barrieron restos de Chromium ({motivo}).")
     except Exception as e:
         log(f"  No se pudo limpiar Chromium huérfano: {e}")
 
@@ -163,7 +193,6 @@ async def un_ciclo() -> None:
     except asyncio.TimeoutError:
         log(f"  ⏱ Ciclo cortado por pasarse de {CYCLE_TIMEOUT_SECS / 60:.0f} min. "
             "Se reintenta en el próximo turno.")
-        _matar_chromium_huerfano()
     except Exception as e:
         # monitor() relanza el error tras agotar sus 3 intentos. En GitHub Actions
         # eso pintaba la corrida en rojo y se acababa ahí; acá NO puede matar el
@@ -175,6 +204,8 @@ async def un_ciclo() -> None:
         log("  El proceso sigue vivo; se reintenta en el próximo turno.")
     finally:
         vigilante.cancel()
+        _matar_chromium_huerfano("fin de ciclo")
+        log(f"  Recursos: {_contar_procesos()}")
 
 
 def _pedir_parada(signum, _frame) -> None:
