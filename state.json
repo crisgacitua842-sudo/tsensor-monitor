@@ -1,4 +1,7 @@
 {
-  "alerted": {},
+  "alerted": {
+    "Coquimbo Bodega - Anden S2": "2026-10-05T19:40:42.695000-03:00",
+    "Coquimbo Bodega - Anden S1": "2026-10-05T19:40:42.695000-03:00"
+  },
   "site_down": false
 }
