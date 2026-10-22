@@ -1,7 +1,9 @@
 {
   "alerted": {
     "Miraflores Bodega - Congelado S3": "2026-10-22T06:01:06.318637-03:00",
-    "Viña del Mar Bodega - Reefer Exterior": "2026-10-22T11:53:42.324561-03:00"
+    "Viña del Mar Bodega - Reefer Exterior": "2026-10-22T11:53:42.324561-03:00",
+    "Miraflores Bodega - Congelados S2": "2026-10-22T12:30:47.472456-03:00",
+    "Miraflores Bodega - Congelado Prod_1": "2026-10-22T12:30:47.472456-03:00"
   },
   "site_down": false
 }
