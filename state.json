@@ -2,9 +2,5 @@
   "alerted": {
     "San Antonio Bodega - Anden - Fresco": "2026-11-10T11:23:32.643864-03:00"
   },
-  "site_down": true,
-  "outage": {
-    "since": "2026-11-16T11:23:45.230673-03:00",
-    "error": "ElementHandle.click: Timeout 30000ms exceeded.\nCall log:\nattempting click action\n  -   waiting for element to be visible, enabled and stable\n  -   element is visible, enabled and stable\n  -   scrolling into view if needed\n  -   done scrolling\n  -   performing click action\n  -   click action done\n  -   waiting for scheduled navigations to finish\n"
-  }
+  "site_down": false
 }
